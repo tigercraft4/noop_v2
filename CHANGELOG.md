@@ -17,6 +17,37 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 1.53 — Recovery builds from your strap alone, Android (#78)
+
+- **New (Android): BLE-only recovery cold-start.** The recovery baseline only ever seeded from
+  *imported* nightly history, so a Bluetooth-only user (no WHOOP CSV) never crossed
+  `Baselines.minNightsSeed` (4 valid nights) and recovery stayed blank forever — even with offloaded
+  nights sitting in the store. `IntelligenceEngine` now runs **two passes**: pass 1 computes each
+  offloaded night's baseline-*independent* aggregates (avgHrv / restingHr via SleepStager+AnalyticsEngine),
+  pass 2 seeds the baseline from the **union of imported + on-device nightly values** and re-scores only
+  the cheap recovery composite. So recovery lights up from the strap's own nights after ~4 nights; it
+  stays honestly null until then; a real import still wins per day. The natural payoff of v1.52's offload.
+- **Under the hood (landed dark — computed/stored, not yet surfaced, pending hardware validation):**
+  - `stepSample` table + `dailyMetric.steps` / `activeKcalEst` columns via a **real additive Room
+    migration** (`MIGRATION_2_3`). **The `.fallbackToDestructiveMigration()` is removed** — with
+    `exportSchema=false` a hand-written-SQL mismatch would otherwise *silently wipe* already-acked,
+    non-resendable strap history; now Room throws loudly instead. The migration SQL was **verified
+    byte-for-byte against Room's generated schema** before shipping.
+  - The WHOOP5 `step_motion_counter@57` (decoded but previously dropped) now persists; `AnalyticsEngine`
+    derives a daily step total + an APPROXIMATE whole-day HR→energy estimate; detected workouts persist
+    under the `-noop` id (deduped against imported workouts). All clearly APPROXIMATE; **the steps tile
+    stays dark** until @57's semantics are validated against the official app.
+  - **Fixed a respiratory-rate band mismatch:** `SleepStager.respRateFromRR` could emit 6–8 bpm, but every
+    consumer (`ReadinessEngine` illness/readiness) only acts on 8–25 — so a sub-8 estimate was
+    persisted-then-silently-ignored. The band is now a single canonical source (`respPlausibleRangeBpm`,
+    owned by the producer, referenced by the consumer); RSA NaNs anything outside it before persisting.
+  - Conservative resp gates (size ≥ 10, raised z-thresholds, 2+ flags to fire) so the noisier on-device
+    RSA can't trip false illness/readiness flags.
+- Reimplemented onto current main from community PR #78 (credited), with the migration-safety + RSA-band
+  fixes applied. v1.48–1.52 work untouched.
+- macOS: **version bump only** — it has the same single-pass-baseline gap; recovery-seeding parity is a
+  tracked follow-up.
+
 ## 1.52 — WHOOP 5.0/MG history offload, Android (#78)
 
 - **New (Android, experimental): WHOOP 5.0/MG historical offload** — Android reaches parity with the
