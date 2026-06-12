@@ -485,6 +485,21 @@ Schema lives in `Packages/WhoopStore/Sources/WhoopStore/Database.swift` as a **v
 
 ---
 
+## Versioning
+
+NOOP follows [Semantic Versioning](https://semver.org) — `MAJOR.MINOR.PATCH`:
+
+- **PATCH** (e.g. `2.0.1`) — bug fixes, diagnostics, small tweaks.
+- **MINOR** (e.g. `2.1.0`) — a new, backwards-compatible feature.
+- **MAJOR** (e.g. `3.0.0`) — a milestone, redesign, or a change that breaks an existing setup or data.
+
+The three parts are independent counters, **not** decimals: `2.0.10` follows `2.0.9`, and there's no
+"next number after `1.99`" — a new feature line is `2.1.0`, not `1.100`. The marketing version lives
+in `project.yml` (`MARKETING_VERSION`) and `android/app/build.gradle.kts` (`versionName`); the build
+numbers (`CFBundleVersion` / `versionCode`) increment independently on every release.
+
+---
+
 ## Roadmap
 
 NOOP's logic already lives in cross-platform packages, so most platform work is app-layer wiring
