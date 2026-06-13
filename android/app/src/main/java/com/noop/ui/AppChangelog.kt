@@ -25,7 +25,7 @@ object AppChangelog {
      * Bump this when you add a release below. The "What's New" sheet shows automatically when the
      * stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
      */
-    const val CURRENT_VERSION = "2.8.9"
+    const val CURRENT_VERSION = "2.9.0"
 
     data class Release(
         val version: String,
@@ -36,6 +36,20 @@ object AppChangelog {
 
     /** Newest first. */
     val releases: List<Release> = listOf(
+        Release(
+            version = "2.9.0",
+            title = "Background GPS, sleep-time editing, log-ahead, and a sharper Rest tile",
+            date = "June 2026",
+            items = listOf(
+                "Fixed: GPS workouts now keep tracking with the screen off. Distance was badly under-counting (a 2.8 km ride logged as 0.4 km) because tracking ran on the screen — it now runs in the always-on background service, so your route survives the screen turning off and the phone going in a pocket. Thanks @pilleuspulcher-blip (#215).",
+                "Fixed: the 'Rest' tile on Today now shows your Rest SCORE (out of 100, like Charge and Effort), with hours-in-bed as the caption — it was showing the hours where the score should be. Thanks @subscriptiondestroyer (#248).",
+                "New: the Sleep screen gains in-app bed/wake-time editing — fix a mis-detected night and every metric recomputes live — plus Hours-vs-Needed and Sleep-Consistency cards, night-by-night navigation, and tappable metric details. Thanks @ujix.",
+                "New: log journal entries for **tomorrow**, not just today and yesterday — today's activities inform tomorrow's recovery. Thanks @Eph00n (#237).",
+                "New: tap-and-drag to inspect the Stress chart, and a cleaner Explore metric picker. Thanks @ujix.",
+                "Improved: body vitals now show which source each reading came from and merge them field-by-field. Thanks @khalilkm01.",
+                "Fixed a heart-rate-ingest crash on startup that your ADB log surfaced. Thanks @maddognik (#224).",
+            ),
+        ),
         Release(
             version = "2.8.9",
             title = "Fixes the Insights-tab crash, plus more accurate HRV",

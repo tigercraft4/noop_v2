@@ -11,7 +11,7 @@ options:
   developmentLanguage: en
 settings:
   base:
-    MARKETING_VERSION: "2.8.9"
+    MARKETING_VERSION: "2.9.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     # Emit localizable strings so Xcode auto-extracts every LocalizedStringKey into the
@@ -58,7 +58,7 @@ targets:
         CFBundleName: NOOP
         CFBundleDisplayName: NOOP
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "97"
+        CFBundleVersion: "98"
         LSMinimumSystemVersion: "13.0"
         LSApplicationCategoryType: public.app-category.healthcare-fitness
         NSBluetoothAlwaysUsageDescription: "NOOP connects directly to your WHOOP strap over Bluetooth to read heart rate, R-R intervals, battery, and sensor data locally on your Mac. Nothing leaves your device."
@@ -83,6 +83,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.noopapp.noop
         PRODUCT_NAME: NOOP
+        # Pin the Swift module name so `@testable import Strand` resolves even though PRODUCT_NAME is
+        # NOOP — the test target and shared sources refer to the app module as `Strand`.
+        PRODUCT_MODULE_NAME: Strand
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
         # Hardened Runtime closes the DYLD_INSERT_LIBRARIES injection vector for the
@@ -110,6 +113,9 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.noopapp.strandtests
+        # Host the unit tests in the app so `@testable import Strand` links against the real app module.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/NOOP.app/Contents/MacOS/NOOP"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 
   # ---------------------------------------------------------------------------
   # iOS app target (community build-from-source; never distributed via the App
@@ -188,7 +194,7 @@ targets:
           - group.com.noopapp.noop
     settings:
       base:
-        CURRENT_PROJECT_VERSION: "52"
+        CURRENT_PROJECT_VERSION: "53"
         PRODUCT_BUNDLE_IDENTIFIER: com.noopapp.noop
         PRODUCT_NAME: NOOP
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -235,3 +241,23 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:
       - package: StrandDesign
+
+# Explicit schemes so `xcodebuild -scheme Strand …` builds + tests the macOS app (with StrandTests
+# wired in) and `-scheme NOOPiOS …` builds the iOS app. Names match the app-build CI matrix.
+schemes:
+  Strand:
+    build:
+      targets:
+        Strand: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - StrandTests
+  NOOPiOS:
+    build:
+      targets:
+        NOOPiOS: all
+    run:
+      config: Debug

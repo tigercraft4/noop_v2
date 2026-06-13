@@ -17,6 +17,32 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 2.9.0 — Background GPS, sleep-time editing, log-ahead, and a sharper Rest tile
+
+- **Fixed (Android):** GPS workouts now keep tracking with the screen off. Distance was badly
+  under-counting (a 2.8 km ride logged as 0.4 km) because tracking ran on the screen — it now runs in
+  the always-on background service, so your route survives the screen turning off and the phone going
+  in a pocket. Thanks @pilleuspulcher-blip. (#215)
+- **Fixed:** the "Rest" tile on Today now shows your Rest **score** (out of 100, like Charge and
+  Effort), with hours-in-bed kept as the caption — it was showing the hours where the score should be.
+  Thanks @subscriptiondestroyer. (#248)
+- **New (Android):** the Sleep screen gains in-app bed/wake-time editing — fix a mis-detected night and
+  every metric recomputes live — plus Hours-vs-Needed and Sleep-Consistency cards, night-by-night
+  navigation, and tappable metric details. Thanks @ujix.
+- **New:** log journal entries for **tomorrow**, not just today and yesterday — today's activities
+  inform tomorrow's recovery. Thanks @Eph00n. (#237)
+- **Fixed (iPhone):** the Explore list could appear empty even though the data was there — it now
+  renders immediately with a brief "scanning" hint instead of a blank list. Thanks @sebastianwoo. (#199)
+- **Improved:** body vitals now show which source each reading came from (your WHOOP, NOOP's own
+  computation, or Apple Health) and merge them field-by-field. Thanks @khalilkm01.
+- **New (Android):** tap-and-drag to inspect the Stress chart, and a cleaner Explore metric picker.
+  Thanks @ujix.
+- **New:** an optional, read-only local-access package (MCP) for power users who want to query their
+  own on-device NOOP data from local tools — opt-in, nothing leaves the device. Thanks @khalilkm01.
+- Also fixed a heart-rate-ingest startup crash that a community ADB log surfaced. Thanks @maddognik. (#224)
+
+---
+
 ## 2.8.9 — Fixes the Insights-tab crash, plus more accurate HRV
 
 - **Fixed (Android):** the Insights tab crashed for anyone with journal entries — a text-matching pattern
