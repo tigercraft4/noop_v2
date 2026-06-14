@@ -17,6 +17,12 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 2.18.1 — Toggle the live-HR Dynamic Island
+
+- **New (iPhone):** a toggle to keep your live heart rate out of the Dynamic Island / Lock Screen — **Settings → Strap → "Live heart rate in Dynamic Island"**. On by default. Thanks @gingerbeardman (#336).
+
+---
+
 ## 2.18.0 — Export your raw sensor data (CSV)
 
 - **New (experimental):** a Settings **Export raw sensor data (CSV)** button dumps the decoded per-sample streams NOOP stores (heart rate, R-R, accelerometer, motion/step counter, SpO2/PPG, events) for the last 24h as a plain CSV — for prototyping your own sleep / activity / VBT algorithms on real data, no BLE coding. On-device only. Thanks @maddognik / @alacore (#322/#276).

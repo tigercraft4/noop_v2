@@ -46,6 +46,8 @@ struct SettingsView: View {
     // Effort display scale (#268). Display-only — Effort stays stored 0–100, this only chooses whether
     // it's shown on NOOP's 0–100 axis or WHOOP's 0–21 Day Strain axis.
     @AppStorage(UnitPrefs.effortScaleKey) private var effortScaleRaw = EffortScale.hundred.rawValue
+    // Live-HR Live Activity (Lock Screen + Dynamic Island), iOS only (#336). Default on.
+    @AppStorage(UnitPrefs.liveActivityKey) private var liveActivityEnabled = true
     private var unitSystem: UnitSystem { UnitSystem(rawValue: unitSystemRaw) ?? .metric }
     private var temperatureUnit: TemperatureUnit {
         UnitPrefs.resolveTemperature(system: unitSystem, override: temperatureRaw)
@@ -381,6 +383,22 @@ struct SettingsView: View {
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                #if os(iOS)
+                Divider().overlay(StrandPalette.hairline)
+                // MARK: Live Activity — show live HR on the Lock Screen + Dynamic Island (#336).
+                Toggle(isOn: $liveActivityEnabled) {
+                    Text("Live heart rate in Dynamic Island")
+                        .font(StrandFont.subhead)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                }
+                .toggleStyle(.switch)
+                .tint(StrandPalette.accent)
+                Text("Shows your live heart rate on the Lock Screen and in the Dynamic Island while the strap is connected. Turn it off to keep your live HR out of the Dynamic Island. (Any one already showing clears within a moment.)")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                #endif
             }
         }
     }

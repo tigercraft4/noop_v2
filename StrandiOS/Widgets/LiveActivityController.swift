@@ -23,6 +23,12 @@ final class LiveActivityController {
     /// stay well under the Live Activity update budget.
     func update(bpm: Int?, recovery: Int?, bonded: Bool) {
         guard authInfo.areActivitiesEnabled else { return }
+        // User opt-out (#336): if the in-app toggle is off, never start — and end any activity that's
+        // already showing (the user just turned it off; this fires on the next ~1 Hz HR tick).
+        guard UnitPrefs.liveActivityEnabled() else {
+            if activity != nil { Task { await end() } }
+            return
+        }
 
         if !bonded {
             Task { await end() }

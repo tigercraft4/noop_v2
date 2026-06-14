@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "2.18.0"
+    static let currentVersion = "2.18.1"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,13 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "2.18.1",
+            title: "Toggle the live-HR Dynamic Island",
+            date: "June 2026",
+            items: [
+                "New (iPhone): a toggle to keep your live heart rate out of the Dynamic Island and Lock Screen — Settings → Strap → \"Live heart rate in Dynamic Island\". On by default; flip it off and any live-HR activity already showing clears within a moment. Thanks @gingerbeardman (#336).",
+            ]),
         Release(
             version: "2.18.0",
             title: "Export your raw sensor data (CSV)",
