@@ -17,6 +17,19 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 4.2.0 — Open a workout, see what it costs you, and share your trends
+
+- Tap any workout to open a full detail view — HR curve over the session, time in each HR zone, duration, avg/max HR, and the Effort it added (#410).
+- Activity Cost: a new Insights section correlates your tagged activities with the next morning's Charge — the typical cost and days-to-baseline, measured against your own untouched rest-day baseline, gated by a confidence level (#439).
+- Shareable trends report: export a one-page PDF of recovery, sleep, HRV, resting HR and strain over a chosen range, entirely on-device via the system share sheet (#436).
+- Last night syncs sooner — a deep backlog now keeps draining while you're connected instead of waiting 15 minutes between bursts, plus a "Sync now" button to backfill on demand (#364).
+- Weight imported from Health Connect now resolves in Compare (Android), where a HC-only weight history was previously invisible (#443).
+- Docs: recorded the FORCE_TRIM / REBOOT_STRAP destructive-command payload forms as known-and-avoidable (NOOP never sends them) (#444). The published Android **demo** APK is retired — the demo flavour stays build-from-source only.
+
+## 4.1.1 — Android hotfix
+
+- Fixed a crash introduced in 4.1.0: making a generic heart-rate strap active could crash the app, and because that strap stays the active source it recurred on every launch. Activating a strap can no longer take the app down (#421). Android only.
+
 ## 4.1.0 — Estimated steps for your WHOOP 4.0
 
 - Steps on a WHOOP 4.0 are now ESTIMATED from the strap's motion and calibrated to your own phone step count (Apple Health / Health Connect) — an honest estimate (shown with an "est." marker, never a pretend pedometer), with a calibration screen (Settings → Profile → Steps estimate) showing estimate-vs-phone and a manual tuning dial. A real phone step count always wins; the estimate only fills uncovered days. (#276/#316/#303/#442/#409)

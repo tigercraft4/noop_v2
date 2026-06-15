@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "4.1.0"
+    static let currentVersion = "4.2.0"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,24 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "4.2.0",
+            title: "Open a workout, see what it costs you, and share your trends",
+            date: "June 2026",
+            items: [
+                "**Tap a workout to open it in full.** Every session now has a detail view — its heart-rate curve over the workout, time in each HR zone, duration, avg/max HR, and the Effort it added — so you can actually look back at a session, not just see it in a list. Thanks @andreasc1 (#410).",
+                "**Activity Cost: learn what each activity actually costs your recovery.** A new Insights section correlates your tagged activities with the next morning's Charge — \"sessions like this usually cost you about N points and take about D days to bounce back\" — measured against your own untouched rest-day baseline, with a confidence level so it only speaks up once it's seen enough. Thanks @subscriptiondestroyer (#439).",
+                "**Shareable trends report.** Export a clean one-page PDF of your recovery, sleep, HRV, resting HR and strain over a range you choose (30 days to all-time) — for a doctor, a coach, or your own records. Entirely on-device, shared through the system share sheet. Thanks @subscriptiondestroyer (#436).",
+                "**Last night syncs sooner.** When a deep backlog is still draining, NOOP now keeps the sync going while you're connected instead of stopping and waiting 15 minutes between bursts — so recent nights arrive in far fewer sessions. There's also a **Sync now** button to kick a backfill on demand. Thanks @idkwargwanbear (#364).",
+                "**Weight from Health Connect now shows in Compare** (Android) — a Health-Connect-only weight history was invisible there before. (#443)",
+            ]),
+        Release(
+            version: "4.1.1",
+            title: "Hotfix — making a heart-rate strap active no longer crashes",
+            date: "June 2026",
+            items: [
+                "Fixed a crash where activating a generic heart-rate strap could take the app down (Android). Thanks @pilleuspulcher-blip (#421).",
+            ]),
         Release(
             version: "4.1.0",
             title: "Estimated steps for your WHOOP 4.0",

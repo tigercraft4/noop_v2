@@ -1,6 +1,7 @@
 package com.noop.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.SportsBasketball
 import androidx.compose.material.icons.filled.SportsGymnastics
 import androidx.compose.material.icons.filled.SportsMartialArts
+import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.SportsTennis
 import androidx.compose.foundation.text.KeyboardOptions
@@ -51,12 +53,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,6 +97,8 @@ fun WorkoutsScreen(vm: AppViewModel) {
     // The ViewModel owns the loaded rows now (ALL sources incl. detected, dismissed-filtered) so a
     // mutation (add / edit / relabel / dismiss / delete) republishes the list and the screen updates.
     val allRows by vm.workouts.collectAsState()
+    // Cached daily metrics — the Charge side of the post-log activity-cost note (#439).
+    val recentDays by vm.recentDays.collectAsStateWithLifecycle()
     var loaded by remember { mutableStateOf(false) }
     var range by remember { mutableStateOf(WorkoutRange.All) }
     // Pick the default range ONCE on first non-empty load; later mutations must not fight a range the
@@ -100,6 +107,26 @@ fun WorkoutsScreen(vm: AppViewModel) {
 
     // The manual add/edit dialog target: Some(null) = add, Some(row) = edit, null = closed.
     var dialog by remember { mutableStateOf<DialogTarget?>(null) }
+
+    // A transient one-line note shown after a manual save / relabel for a sport that already has a
+    // solid/building ActivityCost entry — "Sessions like this usually …" (#439). Auto-clears.
+    var postLogNote by remember { mutableStateOf<String?>(null) }
+    // The sport whose recovery-cost note to surface once the reloaded sessions land. saveManualWorkout
+    // / relabelDetected reload `vm.workouts` asynchronously, so we wait for `allRows` to update before
+    // computing the note (otherwise it would read the pre-save list). Cleared once consumed.
+    var pendingNoteSport by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(allRows, recentDays, pendingNoteSport) {
+        val sport = pendingNoteSport ?: return@LaunchedEffect
+        // Only a solid/building entry (n ≥ minSessions) clears the engine's gate, so this stays silent
+        // until there's an honest personal pattern to show.
+        val match = computeActivityCosts(allRows, recentDays).firstOrNull { it.sport == sport }
+        pendingNoteSport = null
+        if (match != null) {
+            postLogNote = match.sentence()
+            kotlinx.coroutines.delay(7_000)
+            postLogNote = null
+        }
+    }
 
     LaunchedEffect(Unit) {
         vm.loadWorkouts()
@@ -133,14 +160,19 @@ fun WorkoutsScreen(vm: AppViewModel) {
                 onSelect = { range = it },
                 onAdd = { dialog = DialogTarget(null) },
             )
+            postLogNote?.let { PostLogNoteBanner(it) }
             EffortHero(rows = windowRows, effectiveRange = resolved, groups = groups)
             SummarySection(rows = windowRows, effectiveRange = resolved, groups = groups)
             BreakdownSection(groups = groups, rows = windowRows)
             ZonesSection(windowRows)
             SessionsSection(
+                vm = vm,
                 rows = windowRows,
                 onEdit = { dialog = DialogTarget(it) },
-                onRelabel = { row, sport -> vm.relabelDetected(row, sport) },
+                onRelabel = { row, sport ->
+                    vm.relabelDetected(row, sport)
+                    pendingNoteSport = WorkoutEditing.displaySport(sport)
+                },
                 onDismiss = { vm.dismissDetected(it) },
                 onDelete = { vm.deleteWorkout(it) },
             )
@@ -153,6 +185,7 @@ fun WorkoutsScreen(vm: AppViewModel) {
             onDismiss = { dialog = null },
             onSave = { row, replacing ->
                 vm.saveManualWorkout(row, replacing)
+                pendingNoteSport = WorkoutEditing.displaySport(row.sport)
                 dialog = null
             },
         )
@@ -173,6 +206,35 @@ private fun EmptyWorkouts(loaded: Boolean, onAdd: () -> Unit) {
                 "Import in Data Sources to bring them in — or add one you tracked elsewhere.",
         )
         if (loaded) AddWorkoutButton(onAdd)
+    }
+}
+
+/**
+ * The transient "personal pattern" caption shown after a manual save / relabel (#439) — an
+ * Effort-tinted frosted strip with a chart glyph and the engine's "Sessions like this usually …"
+ * sentence. Mirrors the macOS WorkoutsView.postLogBanner. Auto-dismisses (the caller clears it).
+ */
+@Composable
+private fun PostLogNoteBanner(text: String) {
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Palette.effortColor.copy(alpha = 0.10f))
+            .border(1.dp, Palette.effortColor.copy(alpha = 0.22f), shape)
+            .padding(12.dp)
+            .semantics { contentDescription = text },
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            Icons.Filled.ShowChart,
+            contentDescription = null,
+            tint = Palette.effortColor,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(text, style = NoopType.footnote, color = Palette.textSecondary)
     }
 }
 
@@ -521,6 +583,7 @@ private fun ZoneStat(zone: Int, minutes: Double, total: Double, modifier: Modifi
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SessionsSection(
+    vm: AppViewModel,
     rows: List<WorkoutRow>,
     onEdit: (WorkoutRow) -> Unit,
     onRelabel: (WorkoutRow, String) -> Unit,
@@ -552,7 +615,7 @@ private fun SessionsSection(
     }
 
     selectedRow?.let { row ->
-        WorkoutDetailSheet(row = row, onDismiss = { selectedRow = null })
+        WorkoutDetailSheet(vm = vm, row = row, onDismiss = { selectedRow = null })
     }
 }
 
@@ -654,8 +717,32 @@ private fun SessionRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun WorkoutDetailSheet(row: WorkoutRow, onDismiss: () -> Unit) {
+private fun WorkoutDetailSheet(vm: AppViewModel, row: WorkoutRow, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    // Per-window reads (#410): the HR curve (downsampled bucket means) and the HR-zone split. Zones
+    // prefer the imported per-workout percentages (a WHOOP-computed split); only when the row carries
+    // none do we derive zone-minutes from the strap's own raw HR — so we never overwrite a real
+    // imported split with an on-device approximation.
+    var hrCurve by remember(row.startTs) { mutableStateOf<List<Double>>(emptyList()) }
+    var zoneMinutes by remember(row.startTs) { mutableStateOf<List<Double>?>(null) }
+    var zonesFromImport by remember(row.startTs) { mutableStateOf(false) }
+    LaunchedEffect(row.startTs, row.endTs) {
+        hrCurve = vm.workoutHrBuckets(row.startTs, row.endTs).map { it.avgBpm }
+        val imported = parseZonePercents(row.zonesJSON)
+        if (imported != null) {
+            val durMin = (row.durationS ?: (row.endTs - row.startTs).toDouble()) / 60.0
+            if (durMin > 0.0) {
+                zoneMinutes = imported.map { durMin * it / 100.0 }
+                zonesFromImport = true
+            }
+        }
+        if (zoneMinutes == null) {
+            zoneMinutes = vm.workoutZoneMinutes(row.startTs, row.endTs)
+            zonesFromImport = false
+        }
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -696,6 +783,55 @@ private fun WorkoutDetailSheet(row: WorkoutRow, onDismiss: () -> Unit) {
             }
             if (row.strain != null) DetailRow("Strain", oneDecimal(row.strain))
             if (!row.notes.isNullOrBlank()) DetailRow("Notes", row.notes)
+
+            // HR curve over the session window (#410). A faint baseline shows under 2 points.
+            if (hrCurve.size > 1) {
+                CardDivider()
+                Overline("Heart rate")
+                LineChart(
+                    values = hrCurve,
+                    modifier = Modifier.height(Metrics.compactChartHeight),
+                    color = Palette.effortColor,
+                    fill = true,
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    val lo = hrCurve.minOrNull()?.roundToInt() ?: 0
+                    val hi = hrCurve.maxOrNull()?.roundToInt() ?: 0
+                    MiniStat("Avg", row.avgHr?.let { "$it bpm" } ?: "–", Modifier.weight(1f))
+                    MiniStat("Peak", (row.maxHr ?: hi).let { "$it bpm" }, Modifier.weight(1f))
+                    MiniStat("Low", "$lo bpm", Modifier.weight(1f))
+                }
+            }
+
+            // HR-zone split — imported percentages when present, else derived from strap HR (#410).
+            zoneMinutes?.let { z ->
+                val total = z.sum()
+                if (total > 0.0) {
+                    CardDivider()
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Overline("HR zones", modifier = Modifier.weight(1f))
+                        Text(
+                            if (zonesFromImport) "Whoop import" else "From strap HR",
+                            style = NoopType.footnote,
+                            color = Palette.textTertiary,
+                        )
+                    }
+                    SegmentBar(
+                        segments = z.mapIndexed { i, m -> Palette.hrZoneColor(i + 1) to (m / total).toFloat() },
+                        modifier = Modifier.fillMaxWidth(),
+                        height = 24.dp,
+                    )
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        z.forEachIndexed { i, m -> ZoneStat(i + 1, m, total, Modifier.weight(1f)) }
+                    }
+                    Text(
+                        if (zonesFromImport) "WHOOP's imported per-zone split for this session."
+                        else "Time in each %HRmax zone, derived from the strap's heart rate over this window — approximate.",
+                        style = NoopType.footnote,
+                        color = Palette.textTertiary,
+                    )
+                }
+            }
         }
     }
 }

@@ -16,6 +16,14 @@ final class BackfillPolicyTests: XCTestCase {
         XCTAssertTrue(BackfillPolicy.shouldRun(trigger: .manual, now: 1000, lastBackfillAt: 999, emptyStreak: 99))
     }
 
+    // #364: the expedited auto-continue is deliberately un-floored like .manual — it must run even
+    // immediately after the previous backfill (a 60s session just ended). Its runaway protection lives in
+    // BLEManager's consecutive-cap + trim spin-detector, NOT in this policy, so the floor must NOT block it.
+    func testAutoContinueAlwaysRunsRegardlessOfFloorOrStreak() {
+        XCTAssertTrue(BackfillPolicy.shouldRun(trigger: .autoContinue, now: 1000, lastBackfillAt: 999, emptyStreak: 99))
+        XCTAssertTrue(BackfillPolicy.shouldRun(trigger: .autoContinue, now: 1000, lastBackfillAt: 1000))
+    }
+
     func testBaselineFloors() {
         XCTAssertFalse(BackfillPolicy.shouldRun(trigger: .strap, now: 1000, lastBackfillAt: 1000 - fe + 1))
         XCTAssertTrue (BackfillPolicy.shouldRun(trigger: .strap, now: 1000, lastBackfillAt: 1000 - fe))

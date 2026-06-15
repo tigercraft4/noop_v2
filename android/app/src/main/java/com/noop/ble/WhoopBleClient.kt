@@ -561,6 +561,53 @@ class WhoopBleClient(
             }
             return newest
         }
+
+        /** #364 auto-continue cap: consecutive immediate re-kicks per connection before falling back to
+         *  the 900s periodic timer. 6 × ~60s ≈ 6 min of back-to-back draining without letting a
+         *  misbehaving strap monopolise Bluetooth. Mirrors Swift BackfillContinuation.defaultMaxAutoContinues. */
+        const val MAX_AUTO_CONTINUES = 6
+
+        /** #364 "more backlog remains" margin (seconds): how far ahead the strap must be of our persisted
+         *  data frontier before we treat it as behind, not clock noise. Matches the Swift
+         *  BackfillContinuation.defaultBehindGapSeconds (and StuckStrapDetector's behindGapSeconds). */
+        const val AUTO_CONTINUE_BEHIND_GAP_SECONDS = 300L
+
+        /**
+         * Decides whether a backfill session that ended on the 60s IDLE cap (NOT a true HISTORY_COMPLETE)
+         * should immediately re-kick another offload instead of tearing down to wait the 900s periodic
+         * floor (#364). The strap offloads OLDEST-first at ~60s/session with no auto-continue, so on a
+         * deep backlog each connection drains only the oldest pass then waits — "last night" can take many
+         * connections even while the strap stays connected. Auto-continuing drains it in back-to-back
+         * passes. Pure predicate so it's unit-testable without a live GATT stack; mirrors Swift
+         * `BackfillContinuation.shouldAutoContinue` byte-for-behaviour.
+         *
+         * ALL four guards must hold:
+         *  1. [stillConnected] — connected + bonded; a dropped link uses the normal reconnect path.
+         *  2. backlog remains — the strap's newest banked record ([strapNewestTs], GET_DATA_RANGE) is
+         *     AHEAD of our persisted data frontier ([ourFrontierTs] = max persisted HR ts) by more than
+         *     [behindGapSeconds]. Comparing the frontier (not the trim u32, which climbs on empty ENDs even
+         *     when stuck) separates "more to fetch" from "caught up / off-wrist". null on either side ⇒
+         *     unknown ⇒ don't auto-continue.
+         *  3. [lastTrimAdvanced] — the just-ended session actually moved the strap's trim cursor. A frozen
+         *     cursor (console-only / refusing to trim) would spin forever; stop and let the floor retry.
+         *  4. [consecutiveCount] < [maxAutoContinues] — hard per-connection cap.
+         */
+        fun shouldAutoContinue(
+            stillConnected: Boolean,
+            strapNewestTs: Long?,
+            ourFrontierTs: Long?,
+            lastTrimAdvanced: Boolean,
+            consecutiveCount: Int,
+            maxAutoContinues: Int = MAX_AUTO_CONTINUES,
+            behindGapSeconds: Long = AUTO_CONTINUE_BEHIND_GAP_SECONDS,
+        ): Boolean {
+            if (!stillConnected) return false                          // 1
+            if (consecutiveCount >= maxAutoContinues) return false      // 4 (cap)
+            if (!lastTrimAdvanced) return false                        // 3 (don't spin on a frozen cursor)
+            val newest = strapNewestTs ?: return false                 // 2 (unknown)
+            val frontier = ourFrontierTs ?: return false               // 2 (unknown)
+            return (newest - frontier) > behindGapSeconds              // 2 (more backlog remains)
+        }
     }
 
     // MARK: Published state — the single source of truth the UI observes.
@@ -890,6 +937,18 @@ class WhoopBleClient(
 
     /** Guards the once-per-connect initial offload kick (Swift `backfillStarted`). */
     private var backfillStarted = false
+
+    /** #364 auto-continue: consecutive immediate re-kicks after a 60s idle-cap exit on THIS connection.
+     *  Bounded by [MAX_AUTO_CONTINUES] so a pathological strap can't pin the radio. Reset to 0 on a real
+     *  HISTORY_COMPLETE (caught up) and on disconnect. Main-looper only. Mirrors Swift
+     *  `consecutiveAutoContinues`. */
+    private var consecutiveAutoContinues = 0
+
+    /** #364 spin-detector: the trim cursor as of the END of the PREVIOUS backfill session this
+     *  connection. [exitBackfilling] compares Backfiller.lastAckedTrim against this to decide whether the
+     *  just-ended session advanced the strap's trim (progress) or froze (stop re-kicking). null until the
+     *  first session ends; reset on disconnect. Mirrors Swift `lastSessionEndTrim`. */
+    private var lastSessionEndTrim: Long? = null
 
     /** Newest unix the strap reports having (from GET_DATA_RANGE); refreshed each connect. */
     @Volatile
@@ -3021,6 +3080,66 @@ class WhoopBleClient(
         Backfiller.sessionSummaryLine(
             backfiller.sessionRowsPersisted, backfiller.sessionMotionRows, backfiller.sessionNights,
         )?.let { log(it) }
+
+        // #364 auto-continue spin-detector: did THIS session move the strap's trim cursor? Compare the
+        // Backfiller's current high-water trim against where it stood when the previous session ended.
+        // A frozen cursor (console-only / refusing to trim) ⇒ don't re-kick (it would spin forever).
+        val currentTrim = backfiller.lastAckedTrim
+        val trimAdvanced = currentTrim != null && currentTrim != lastSessionEndTrim
+        lastSessionEndTrim = currentTrim
+        if (reason == "HISTORY_COMPLETE") {
+            // Ran to true completion ⇒ caught up. Clear the streak so the NEXT deep backlog (e.g. after
+            // the app's been off again) gets a fresh budget of re-kicks.
+            consecutiveAutoContinues = 0
+        } else if (reason == "timeout") {
+            // A 60s idle-cap exit while still connected, with more backlog and the trim advancing,
+            // immediately re-kicks instead of waiting the 900s periodic floor — so a deep oldest-first
+            // backlog drains in back-to-back ~60s passes. Bounded by the cap + spin-detector.
+            maybeAutoContinueBackfill(trimAdvanced)
+        }
+    }
+
+    /**
+     * #364: evaluate (and, if warranted, fire) an immediate back-to-back backfill after a 60s idle-cap
+     * exit. The "more backlog remains" test needs our persisted data frontier (max HR ts) from the
+     * repository, so it reads on [ioScope] then re-kicks back on the main looper via [requestSync] (the
+     * SAME gated path the auto-kick + periodic timer use — it re-checks connected/bonded/not-backfilling,
+     * so this can't double-start). The decision is the pure [shouldAutoContinue] so it stays unit-testable.
+     * [trimAdvanced] is the spin-detector signal computed in [exitBackfilling] (passed in because that
+     * method has already advanced [lastSessionEndTrim] past the comparison point). Android has no
+     * BackfillPolicy floor ported (only the 900s timer), so [requestSync] needs no special bypass tier —
+     * it always runs when the gate passes. Mirrors Swift `maybeAutoContinueBackfill`.
+     */
+    private fun maybeAutoContinueBackfill(trimAdvanced: Boolean) {
+        val s = _state.value
+        if (!s.connected || !s.bonded) return
+        val newest = strapNewestTs
+        val count = consecutiveAutoContinues
+        ioScope.launch {
+            val frontier = runCatching { repository.latestHrSampleTs(deviceId) }.getOrNull()
+            if (!shouldAutoContinue(
+                    stillConnected = _state.value.connected && _state.value.bonded,
+                    strapNewestTs = newest,
+                    ourFrontierTs = frontier,
+                    lastTrimAdvanced = trimAdvanced,
+                    consecutiveCount = count,
+                )
+            ) {
+                return@launch
+            }
+            handler.post {
+                // Re-check on the main looper: a real backfill may already have re-started (periodic) in
+                // the gap. requestSync's own gate handles that, but skip the log/counter churn if so.
+                if (backfilling) return@post
+                consecutiveAutoContinues += 1
+                log(
+                    "Backfill: auto-continuing (#364) — more backlog remains (strap ahead of our " +
+                        "${frontier ?: "?"} frontier) and the trim is advancing; re-kicking offload " +
+                        "$consecutiveAutoContinues/$MAX_AUTO_CONTINUES without waiting the 15-min floor.",
+                )
+                requestSync()
+            }
+        }
     }
 
     /**
@@ -3227,6 +3346,10 @@ class WhoopBleClient(
         lastOffloadFrameAtMs = 0L   // #174: don't carry a stale cooldown reference into the next session
         historicalKickSent = false
         whoop5HistoryAttempts = 0
+        // #364: the auto-continue streak + spin-detector are per-connection — a fresh connection earns a
+        // fresh budget of back-to-back re-kicks and restarts its trim-advance comparison from scratch.
+        consecutiveAutoContinues = 0
+        lastSessionEndTrim = null
         // A mid-offload link drop must still flush the capture file (summary already logged or not —
         // don't double-log it here).
         closeWhoop5BackfillCapture(flushSummary = false)

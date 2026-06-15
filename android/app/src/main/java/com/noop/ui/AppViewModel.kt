@@ -693,6 +693,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // MARK: - Workout detail reads (#410) — suspend helpers, additive
+
+    /** Downsampled HR (mean bpm per bucket) over ONE workout's [from, to] window for the detail
+     *  HR-curve. A short session wants a finer bucket than the Today 24h chart (300 s would flatten a
+     *  30-min run to ~6 points), so the bucket scales with duration: ~120 buckets across the window,
+     *  floored at 15 s and capped at 300 s. Mirrors macOS Repository.workoutHrBuckets. */
+    suspend fun workoutHrBuckets(from: Long, to: Long): List<com.noop.data.HrBucket> {
+        if (to <= from) return emptyList()
+        val span = to - from
+        val bucket = (span / 120).coerceIn(15L, 300L)
+        return runCatching { repository.hrBuckets(deviceId, from, to, bucket) }.getOrDefault(emptyList())
+    }
+
+    /** Per-zone MINUTES for a workout window, binning the strap's raw HR samples into the age-derived
+     *  (Tanaka) %HRmax zones — the same display zone model the Workouts screen uses for imported zone
+     *  percentages, but from the strap's own samples so a session WITHOUT imported zones still gets a
+     *  real time-in-zone split. null when the window carries no HR. age <= 0 falls back to 30 y.
+     *  Mirrors macOS Repository.workoutZoneMinutes. */
+    suspend fun workoutZoneMinutes(from: Long, to: Long): List<Double>? {
+        if (to <= from) return null
+        val samples = runCatching { repository.hrSamples(deviceId, from, to) }.getOrDefault(emptyList())
+        if (samples.isEmpty()) return null
+        val age = profileStore.age.toDouble().takeIf { it > 0 } ?: 30.0
+        val zoneSet = com.noop.analytics.HrZones.zones(age = age)
+        val tiz = com.noop.analytics.HrZones.timeInZone(samples, zoneSet)
+        val minutes = tiz.seconds.map { it / 60.0 }
+        return if (minutes.any { it > 0.0 }) minutes else null
+    }
+
     /** Save a retroactive / edited manual workout, then reload. [replacing] is the original on edit. */
     fun saveManualWorkout(row: WorkoutRow, replacing: WorkoutRow? = null) {
         viewModelScope.launch {

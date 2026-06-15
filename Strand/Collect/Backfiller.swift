@@ -82,6 +82,13 @@ final class Backfiller {
     /// sentinel: it has no banked history to offload (a clock/charge state, not a decode bug).
     private var loggedNoCursor = false
 
+    /// The trim cursor of the LAST chunk this Backfiller acked (durably persisted + confirmed to the
+    /// strap). Survives across sessions on the same connection so the auto-continue gate (#364) can ask
+    /// "did the offload actually advance the strap's trim this session?" — the spin-detector signal that
+    /// stops it re-kicking forever when the cursor is frozen. nil until the first ack. NOT reset in
+    /// `begin()` (it's a cross-session high-water mark, not a per-session tally).
+    private(set) var lastAckedTrim: UInt32?
+
     /// Distinct historical layout versions logged this session. Unlike `loggedUnmappedVersions` (which
     /// only fires for layouts NOOP can't decode), this surfaces the layout on a HEALTHY sync too, so a
     /// shared strap log always reveals what the strap emits (v18/v24/v25/v26). Mirrors the Android
@@ -314,6 +321,7 @@ final class Backfiller {
         do { try await store.setCursor("strap_trim", Int(trim)) } catch { return }
 
         ackTrim(trim, endData)
+        lastAckedTrim = trim   // #364: record the advanced cursor for the auto-continue spin-detector
     }
 
     /// Called when a backfill watchdog timer fires (strap went silent mid-offload).

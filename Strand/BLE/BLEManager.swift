@@ -93,6 +93,57 @@ struct EmptySyncTracker {
     }
 }
 
+/// Decides whether a backfill session that ended on the 60s IDLE cap (not a true HISTORY_COMPLETE)
+/// should immediately re-kick another offload instead of tearing down to wait the 15-min periodic floor
+/// (#364). The real bug: the strap offloads OLDEST-first at ~60s/session, so on a deep backlog (e.g. the
+/// app was off for days) each connection drains only ~one session's worth of the OLDEST data, then waits
+/// 15 minutes — so "last night" can take many connections to reach even while the strap stays connected
+/// the whole time. Auto-continuing closes that gap: keep re-offloading back-to-back while the strap is
+/// still connected, there's demonstrably more backlog, and we're still making progress.
+///
+/// Pure + value-typed so the decision is unit-testable without a CoreBluetooth seam (Backfill
+/// ContinuationTests). Mirrored byte-for-behaviour on Android (WhoopBleClient.shouldAutoContinue).
+///
+/// The four guards (ALL must hold):
+///  1. `stillConnected` — connected + bonded; a dropped link goes through the normal reconnect path.
+///  2. backlog remains — the strap's newest banked record (`strapNewestTs`, from GET_DATA_RANGE) is
+///     still AHEAD of our persisted data frontier (`ourFrontierTs` = max persisted HR ts) by more than
+///     `behindGapSeconds`. Comparing the frontier (not the trim u32, which climbs on empty ENDs even
+///     when stuck) is what separates "more to fetch" from "caught up / off-wrist" — same idiom as
+///     StuckStrapDetector. nil on either side ⇒ unknown ⇒ don't auto-continue (let the floor handle it).
+///  3. `lastTrimAdvanced` — the just-ended session actually moved the strap's trim cursor. If the cursor
+///     is frozen (strap handing back console-only / refusing to trim), re-kicking would spin forever
+///     burning battery; stop and let the periodic floor retry slowly.
+///  4. `consecutiveCount < maxAutoContinues` — a hard per-connection cap so a pathological strap can't
+///     pin the radio. Once hit, fall back to the 15-min floor.
+struct BackfillContinuation {
+    /// Hard cap on consecutive auto-continues per connection (resets on disconnect). 6 × ~60s ≈ 6 min of
+    /// back-to-back draining — enough to chew through a multi-night backlog far faster than the 15-min
+    /// floor, without letting a misbehaving strap monopolise Bluetooth.
+    static let defaultMaxAutoContinues = 6
+    /// How far ahead the strap must be (seconds) before "more backlog remains" is real, not clock noise.
+    /// Matches StuckStrapDetector.behindGapSeconds (5 min) so the two agree on "behind".
+    static let defaultBehindGapSeconds = 300
+
+    /// `stillConnected`: link up + command channel usable. `strapNewestTs`: newest record the strap holds
+    /// (GET_DATA_RANGE). `ourFrontierTs`: newest record WE'VE persisted (max HR ts). `lastTrimAdvanced`:
+    /// the just-ended session moved the trim cursor. `consecutiveCount`: auto-continues already done this
+    /// connection. Returns true to immediately re-kick beginBackfill; false to tear down to the floor.
+    static func shouldAutoContinue(stillConnected: Bool,
+                                   strapNewestTs: Int?,
+                                   ourFrontierTs: Int?,
+                                   lastTrimAdvanced: Bool,
+                                   consecutiveCount: Int,
+                                   maxAutoContinues: Int = defaultMaxAutoContinues,
+                                   behindGapSeconds: Int = defaultBehindGapSeconds) -> Bool {
+        guard stillConnected else { return false }                 // 1
+        guard consecutiveCount < maxAutoContinues else { return false }   // 4 (cap)
+        guard lastTrimAdvanced else { return false }               // 3 (don't spin on a frozen cursor)
+        guard let newest = strapNewestTs, let frontier = ourFrontierTs else { return false }  // 2 (unknown)
+        return (newest - frontier) > behindGapSeconds              // 2 (more backlog remains)
+    }
+}
+
 /// CoreBluetooth engine for the WHOOP 4.0: scan-by-service → connect → discover →
 /// BOND (one confirmed write) → subscribe → reassemble char-05 frames → FrameRouter.
 /// Cannot run in the simulator; verified manually on-device (Task C6).
@@ -212,6 +263,15 @@ public final class BLEManager: NSObject, ObservableObject {
     static let backfillLastAtKey = "backfillLastAt"
     /// Prevents a second backfill from starting on a same-process reconnect to the same strap.
     private var backfillStarted = false
+    /// #364 auto-continue: how many times we've immediately re-kicked a backfill after a 60s idle-cap
+    /// exit on THIS connection. Bounded by BackfillContinuation.maxAutoContinues so a pathological strap
+    /// can't pin the radio. Reset to 0 on a real HISTORY_COMPLETE (we're caught up) and on disconnect.
+    private var consecutiveAutoContinues = 0
+    /// #364 spin-detector: the trim cursor as of the END of the previous backfill session this
+    /// connection. exitBackfilling compares the current Backfiller.lastAckedTrim against this to decide
+    /// whether the just-ended session actually advanced the strap's trim (progress) or froze (stop
+    /// re-kicking). nil until the first session ends; reset on disconnect.
+    private var lastSessionEndTrim: UInt32?
     /// Runs the connect handshake EXACTLY ONCE per connection. `didWriteValueFor` re-fires on every
     /// `.withResponse` write (the bond write, every SEND_HISTORICAL, every HISTORY_END ack); without
     /// this guard those re-entries re-blasted hello/SET_CLOCK at the strap mid-offload and stopped it
@@ -927,6 +987,12 @@ public final class BLEManager: NSObject, ObservableObject {
            let summary = Backfiller.sessionSummaryLine(rows: bf.sessionRowsPersisted, motion: bf.sessionMotionRows, nights: bf.sessionNights) {
             log(summary)
         }
+        // #364 auto-continue spin-detector: did THIS session move the strap's trim cursor? Compare the
+        // Backfiller's current high-water trim against where it stood when the previous session ended.
+        // A frozen cursor (console-only / strap refusing to trim) ⇒ don't re-kick (it would spin forever).
+        let currentTrim = backfiller?.lastAckedTrim
+        let trimAdvanced = currentTrim != nil && currentTrim != lastSessionEndTrim
+        lastSessionEndTrim = currentTrim
         // Honest sync outcome for a cloud-free user (mirrors Android exitBackfilling, ed6a31d):
         // HISTORY_COMPLETE stamps lastSyncedAt + clears any error; the idle-watchdog timeout surfaces
         // a non-silent error. A disconnect mid-sync bypasses this path (didDisconnectPeripheral resets
@@ -970,10 +1036,58 @@ public final class BLEManager: NSObject, ObservableObject {
                 state.lastSyncError = nil
             }
             UserDefaults.standard.set(state.lastSyncedAt, forKey: "lastSyncedAt")
+            // We ran the offload to true completion ⇒ caught up. Clear the auto-continue streak so the
+            // NEXT deep backlog (e.g. after the app's been off again) gets a fresh budget of re-kicks.
+            consecutiveAutoContinues = 0
         } else if reason == "timeout" {
             state.lastSyncError = "Sync interrupted — the strap went quiet. It will retry on the next sync."
         }
         checkStrapLiveness()         // safety-net: strap ahead of us AND our frontier frozen ⇒ stuck?
+        // #364: a session that ended on the 60s IDLE cap (NOT a real HISTORY_COMPLETE) while still
+        // connected, with more backlog to fetch and the trim still advancing, immediately re-kicks
+        // another offload instead of tearing down to wait the 15-min floor — so a deep oldest-first
+        // backlog drains in back-to-back ~60s passes rather than one-per-15-min. Bounded by the
+        // consecutive-cap and the spin-detector inside the pure predicate.
+        if reason == "timeout" {
+            maybeAutoContinueBackfill(trimAdvanced: trimAdvanced)
+        }
+    }
+
+    /// #364: evaluate (and, if warranted, fire) an immediate back-to-back backfill after a 60s idle-cap
+    /// exit. The "more backlog remains" test needs our persisted data frontier (max HR ts), which only
+    /// the Collector can read, so this hops onto a Task exactly like `checkStrapLiveness`. The decision
+    /// itself is the pure `BackfillContinuation.shouldAutoContinue` so it stays unit-testable; this
+    /// method only gathers the inputs, bumps the counter, and re-kicks via the SAME gated requestSync
+    /// path (so it still respects connected/bonded and can't double-start). The `.autoContinue` trigger ⇒
+    /// the BackfillPolicy 15-min floor is bypassed for this expedited continuation (the cap is the guard).
+    /// `trimAdvanced` is the spin-detector signal computed in exitBackfilling (did this session move the
+    /// trim cursor vs the previous one) — passed in because exitBackfilling has already advanced
+    /// `lastSessionEndTrim` past the comparison point by the time this Task runs.
+    private func maybeAutoContinueBackfill(trimAdvanced: Bool) {
+        // Cheap pre-checks first (no Task if we already know we won't continue): still connected, under
+        // the cap, and the trim moved. The frontier read only happens when those already hold.
+        guard state.connected, state.bonded else { return }
+        let newest = strapNewestTs
+        let count = consecutiveAutoContinues
+        Task { @MainActor in
+            let frontier = await collector?.latestHRSampleTs() ?? nil
+            guard BackfillContinuation.shouldAutoContinue(
+                stillConnected: state.connected && state.bonded,
+                strapNewestTs: newest,
+                ourFrontierTs: frontier,
+                lastTrimAdvanced: trimAdvanced,
+                consecutiveCount: count) else { return }
+            // Guard against a race: a real backfill may already have re-started (periodic/connect) in the
+            // gap before this Task ran. requestSync's own gate (!backfilling) handles that, but skip the
+            // log/counter churn if so.
+            guard !backfilling else { return }
+            consecutiveAutoContinues += 1
+            log("Backfill: auto-continuing (#364) — more backlog remains (strap ahead of our \(frontier.map(String.init) ?? "?") frontier) and the trim is advancing; re-kicking offload \(consecutiveAutoContinues)/\(BackfillContinuation.defaultMaxAutoContinues) without waiting the 15-min floor.")
+            // .autoContinue bypasses the BackfillPolicy floor (the whole point — don't wait 15 min);
+            // requestSync still re-checks connected/bonded/not-backfilling before kicking, and the
+            // consecutive-cap above is the runaway guard.
+            requestSync(.autoContinue)
+        }
     }
 
     /// On-device archive for HISTORICAL_DATA record frames that failed decode (#77 / #91).
@@ -1344,6 +1458,25 @@ public final class BLEManager: NSObject, ObservableObject {
         requestSync(.periodic)
     }
 
+    /// User-tappable "Sync now" (#364): kick a historical offload IMMEDIATELY, bypassing the 15-min
+    /// periodic floor. Routes through the SAME gated `requestSync` as every other trigger with the
+    /// `.manual` tier — so it always passes the BackfillPolicy floor but still honours the
+    /// connected+bonded+not-already-backfilling gate (a no-op, honestly, when there's no strap or a
+    /// sync is already running). The caller (Health screen) only enables the control while connected, so
+    /// a tap is meaningful; this guard is the belt-and-braces. Mirrors the Android `WhoopBleClient.syncNow`.
+    public func syncNow() {
+        guard state.connected, state.bonded else {
+            log("Sync now: no strap connected — ignored.")
+            return
+        }
+        if backfilling {
+            log("Sync now: a sync is already in progress.")
+            return
+        }
+        log("Sync now: manual sync requested by user.")
+        requestSync(.manual)
+    }
+
     // MARK: Helpers
     private static let logTimeFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f
@@ -1664,6 +1797,10 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         // Reset backfill state so the next connect starts a fresh offload (incl. the syncing pill —
         // a dropped link mid-offload must not leave "Syncing strap history…" stuck on, #77).
         backfillStarted = false
+        // #364: the auto-continue streak + spin-detector are per-connection — a fresh connection earns a
+        // fresh budget of back-to-back re-kicks and starts its trim-advance comparison from scratch.
+        consecutiveAutoContinues = 0
+        lastSessionEndTrim = nil
         backfilling = false
         state.backfilling = false
         state.syncChunksThisSession = 0

@@ -37,6 +37,18 @@ object AppChangelog {
     /** Newest first. */
     val releases: List<Release> = listOf(
         Release(
+            version = "4.2.0",
+            title = "Open a workout, see what it costs you, and share your trends",
+            date = "June 2026",
+            items = listOf(
+                "Tap a workout to open it in full. Every session now has a detail view — its heart-rate curve, time in each HR zone, duration, avg/max HR, and the Effort it added. Thanks @andreasc1 (#410).",
+                "Activity Cost: a new Insights section learns what each activity costs your recovery — the next-morning Charge hit and days-to-bounce-back, measured against your own untouched rest-day baseline, with a confidence level. Thanks @subscriptiondestroyer (#439).",
+                "Shareable trends report — export a clean one-page PDF of recovery, sleep, HRV, resting HR and strain over a range you choose, entirely on-device. Thanks @subscriptiondestroyer (#436).",
+                "Last night syncs sooner: NOOP keeps a deep backlog draining while you're connected instead of waiting 15 minutes between bursts, plus a Sync now button to backfill on demand. Thanks @idkwargwanbear (#364).",
+                "Weight from Health Connect now shows in Compare — it was invisible there before. (#443)",
+            ),
+        ),
+        Release(
             version = "4.1.1",
             title = "Hotfix — making a heart-rate strap active no longer crashes",
             date = "June 2026",

@@ -1,5 +1,6 @@
 import SwiftUI
 import StrandDesign
+import StrandAnalytics
 import WhoopStore
 import Foundation
 
@@ -45,9 +46,23 @@ struct WorkoutsView: View {
     /// `nil` = sheet closed. Wrapped in Identifiable so `.sheet(item:)` can drive presentation.
     @State private var sheet: WorkoutSheetTarget?
 
+    /// The read-only detail screen target — a tapped session. Drives a `.sheet(item:)` separate from
+    /// the add/edit sheet so a primary tap (detail) and the ••• menu (edit) never collide. (#410)
+    @State private var detail: WorkoutDetailTarget?
+
+    /// A transient one-line note shown after a manual save / relabel for a sport that already has a
+    /// solid/building ActivityCost entry — "Sessions like this usually …" (#439). Auto-clears.
+    @State private var postLogNote: String?
+
     /// Wraps the optional edited row so `.sheet(item:)` can present add (editing == nil) or edit.
     private struct WorkoutSheetTarget: Identifiable {
         let editing: WorkoutRow?
+        let id = UUID()
+    }
+
+    /// Wraps a tapped row so `.sheet(item:)` can present its detail screen.
+    private struct WorkoutDetailTarget: Identifiable {
+        let row: WorkoutRow
         let id = UUID()
     }
 
@@ -80,6 +95,7 @@ struct WorkoutsView: View {
                 let zonesSummary = WorkoutZones.summary(from: windowRows)
 
                 rangeBar(rows: windowRows, effectiveRange: resolved)
+                if let postLogNote { postLogBanner(postLogNote) }
                 effortHero(rows: windowRows, effectiveRange: resolved, groups: groups)
                 summarySection(rows: windowRows, effectiveRange: resolved, groups: groups)
                 breakdownSection(groups: groups, rows: windowRows)
@@ -112,10 +128,31 @@ struct WorkoutsView: View {
                 Task {
                     await repo.saveManualWorkout(row, replacing: replacing)
                     await reload()
+                    // Post-log note (#439): if this sport now has a solid/building recovery-cost
+                    // entry, surface its personal-pattern sentence as a transient caption.
+                    await showPostLogNote(forSport: WorkoutSource.displaySport(row.sport))
                 }
             }
         }
+        .sheet(item: $detail) { target in
+            // These shared screens aren't hosted in a per-screen NavigationStack, so the read-only
+            // detail rides its own NavigationStack inside the sheet (the Done toolbar item + iOS
+            // grabber give the dismiss affordances). Mirrors HealthView presenting MetricDetailView.
+            NavigationStack {
+                WorkoutDetailView(row: target.row)
+                    .environmentObject(repo)
+            }
+            #if os(iOS)
+            .noopSheetPresentation(largeFirst: true)
+            #else
+            .frame(minWidth: 560, minHeight: 640)
+            #endif
+        }
     }
+
+    /// Present the read-only detail for a tapped row. The primary affordance; the ••• menu stays the
+    /// secondary path for edit/relabel/delete.
+    private func openDetail(_ row: WorkoutRow) { detail = WorkoutDetailTarget(row: row) }
 
     /// Re-read every source after a mutation so the screen reflects the new state immediately.
     /// Keeps the user's current range — only the initial load picks a default — and the auto-widen
@@ -124,12 +161,60 @@ struct WorkoutsView: View {
         allRows = await repo.workoutRows()
     }
 
+    // MARK: - Post-log activity-cost note (#439)
+
+    /// After a manual save / relabel, look up whether `sport` has a solid/building ActivityCost entry
+    /// (n ≥ minSessions) and, if so, show its plain-English sentence as a transient caption that
+    /// auto-clears. Copy is "usually"/"personal pattern" framed (the engine's own wording) — never a
+    /// law. Computes off the freshly reloaded sessions + the merged daily Charge.
+    private func showPostLogNote(forSport sport: String) async {
+        let costs = InsightsView.computeActivityCosts(workouts: allRows, days: repo.days)
+        guard let match = costs.first(where: { $0.sport == sport }) else {
+            await MainActor.run { postLogNote = nil }
+            return
+        }
+        let sentence = match.sentence()
+        await MainActor.run { withAnimation(.easeOut(duration: 0.2)) { postLogNote = sentence } }
+        // Auto-dismiss after a few seconds (transient caption, not a permanent card).
+        try? await Task.sleep(nanoseconds: 7_000_000_000)
+        await MainActor.run {
+            if postLogNote == sentence { withAnimation(.easeOut(duration: 0.2)) { postLogNote = nil } }
+        }
+    }
+
+    /// The transient "personal pattern" caption — an Effort-tinted frosted strip with a chart glyph.
+    private func postLogBanner(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "chart.line.uptrend.xyaxis")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(StrandPalette.effortColor)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(StrandPalette.effortColor.opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(StrandPalette.effortColor.opacity(0.22), lineWidth: 1))
+        .transition(.opacity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(text)
+    }
+
     // MARK: - Row actions (edit · relabel · dismiss · delete)
 
     private func editWorkout(_ row: WorkoutRow) { sheet = WorkoutSheetTarget(editing: row) }
 
     private func relabel(_ row: WorkoutRow, to sport: String) {
-        Task { await repo.relabelDetected(row, sport: sport); await reload() }
+        Task {
+            await repo.relabelDetected(row, sport: sport)
+            await reload()
+            await showPostLogNote(forSport: WorkoutSource.displaySport(sport))
+        }
     }
 
     private func dismiss(_ row: WorkoutRow) {
@@ -525,7 +610,7 @@ struct WorkoutsView: View {
             #if os(iOS)
             // Each row now carries a visible "•••" actions button; the long-press contextMenu still
             // works as a secondary path (#183).
-            Text("Tap ••• on a workout to re-label, edit or delete it.")
+            Text("Tap a workout for its detail · tap ••• to re-label, edit or delete it.")
                 .font(StrandFont.caption)
                 .foregroundStyle(StrandPalette.textTertiary)
                 .padding(.horizontal, 4)
@@ -620,7 +705,12 @@ struct WorkoutsView: View {
         .padding(.horizontal, NoopMetrics.cardPadding)
         .frame(height: RowMetrics.rowHeight)
         .contentShape(Rectangle())
+        // PRIMARY tap → the read-only detail (#410). The trailing ••• Menu button consumes its own
+        // tap, so tapping the actions glyph still opens the menu rather than the detail.
+        .onTapGesture { openDetail(row) }
         .contextMenu { rowMenu(row) }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Opens workout detail")
     }
 
     /// The same actions as `rowMenu`, surfaced as a tappable "•••" button so they're discoverable on

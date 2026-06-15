@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- FileProvider paths for the strap-log export (LogExport). Only the app's own cache/logs dir. -->
+<!-- FileProvider paths for in-app exports. Only the app's own cache subdirs are shared:
+     - logs/    : the strap-log export (LogExport) + 5/MG raw capture
+     - reports/ : the shareable offline trends report PDF (TrendsReport, #436) -->
 <paths>
     <cache-path name="logs" path="logs/" />
+    <cache-path name="reports" path="reports/" />
 </paths>

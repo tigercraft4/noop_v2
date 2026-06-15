@@ -15,6 +15,7 @@ struct HealthView: View {
     @EnvironmentObject var repo: Repository
     @EnvironmentObject var live: LiveState
     @EnvironmentObject var profile: ProfileStore
+    @EnvironmentObject var model: AppModel
 
     // MARK: - Derived live HR
 
@@ -34,9 +35,17 @@ struct HealthView: View {
                        subtitle: "Live vitals, streamed from the strap.",
                        onRefresh: { await repo.refresh() }) {
             if repo.days.isEmpty && !hasLiveHR {
-                emptyState
+                VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
+                    // Even with no history yet, a freshly-connected strap can be told to sync now (#364) —
+                    // so the control is reachable before the screen has any data to show.
+                    SyncStatusSection()
+                    emptyState
+                }
             } else {
                 VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
+                    // Manual "Sync now" + honest sync status (#364). Its own view so the ~1Hz HR stream
+                    // doesn't re-render it; depends on `live` (connection/backfill state) + `model`.
+                    SyncStatusSection()
                     // The live HR section is its own view: it owns `live`/`profile`,
                     // so the ~1Hz HR stream re-renders only this subtree — the static
                     // vitals grid below does not re-render on each HR tick.
@@ -64,6 +73,90 @@ struct HealthView: View {
 
     private var emptyState: some View {
         ComingSoon(what: "No biometrics yet. Import your WHOOP export (and Apple Health if you have it) in Data Sources to fill this in.")
+    }
+}
+
+// MARK: - Sync status + "Sync now" (#364)
+
+/// Manual "Sync now" control + honest sync status, mirroring the Android Sync-now button. Its own view
+/// depending only on `live` (connection + backfill state) and `model` (the BLE pass-through), so the
+/// ~1Hz live HR stream never re-renders it. Honesty rules (CLAUDE.md): the button is disabled and the
+/// copy explains itself when no strap is connected; while a sync runs it shows the in-progress pill +
+/// the live chunk count (never a fabricated percent — total pending is unknowable from the protocol);
+/// otherwise it shows when history last synced.
+private struct SyncStatusSection: View {
+    @EnvironmentObject var live: LiveState
+    @EnvironmentObject var model: AppModel
+
+    /// The strap link is usable for a manual offload kick (matches BLEManager.syncNow's own gate).
+    private var canSync: Bool { live.connected && live.bonded && !live.backfilling }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+            SectionHeader("Sync", overline: "Strap history",
+                          trailing: live.connected ? (live.bonded ? "Connected" : "Pairing…") : "Offline")
+
+            NoopCard(tint: StrandPalette.chargeColor) {
+                VStack(alignment: .leading, spacing: 14) {
+                    statusRow
+
+                    Button {
+                        // Reach the BLE engine's gated entry point directly (same idiom as
+                        // SettingsView's `model.ble.enableWhoop5DeepData()`). BLEManager.syncNow() is the
+                        // honest gate — a no-op when no strap is connected or a sync is already running.
+                        model.ble.syncNow()
+                    } label: {
+                        Label(live.backfilling ? "Syncing…" : "Sync now",
+                              systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .buttonStyle(.noopSecondary)
+                    .disabled(!canSync)
+                    .accessibilityLabel("Sync now")
+                    .accessibilityHint(canSync
+                        ? "Pulls your strap's stored history immediately, without waiting for the next automatic sync."
+                        : (live.backfilling ? "A sync is already in progress." : "Connect your strap first."))
+
+                    Text(helperText)
+                        .font(StrandFont.footnote)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// The status line above the button: an in-progress pill while syncing (with the live chunk count),
+    /// else a last-synced read-out, else an honest "not connected".
+    @ViewBuilder private var statusRow: some View {
+        if live.backfilling {
+            // Reuse the shared in-progress affordance so this matches every other "syncing history" surface.
+            SyncingHistoryNote(chunks: live.syncChunksThisSession)
+        } else if !live.connected {
+            StatePill("No strap connected", tone: .neutral, showsDot: false)
+        } else if let last = live.lastSyncedAt {
+            HStack(spacing: 8) {
+                StatePill("History synced", tone: .positive)
+                Text(relativeAgo(last))
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(StrandPalette.textSecondary)
+            }
+        } else {
+            StatePill(live.bonded ? "Ready to sync" : "Pairing…",
+                      tone: .accent, showsDot: true, pulsing: !live.bonded)
+        }
+    }
+
+    private var helperText: String {
+        if live.backfilling {
+            return "Pulling your strap's stored history. This drains oldest-first; a deep backlog now continues automatically across passes instead of waiting between syncs."
+        }
+        if !live.connected {
+            return "Connect your strap to sync its stored history. Until then, only imported data shows here."
+        }
+        if !live.bonded {
+            return "Finishing the pairing handshake — Sync now becomes available once the strap is paired."
+        }
+        return "Syncs your strap's stored history right away, instead of waiting for the next automatic sync."
     }
 }
 
@@ -996,6 +1089,7 @@ private struct VitalsSection: View {
         .environmentObject(repo)
         .environmentObject(live)
         .environmentObject(ProfileStore())
+        .environmentObject(AppModel())
         .frame(width: 900, height: 760)
         .preferredColorScheme(.dark)
 }

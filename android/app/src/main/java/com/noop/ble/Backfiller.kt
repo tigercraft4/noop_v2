@@ -145,6 +145,18 @@ class Backfiller(
     private var loggedNoCursor = false
 
     /**
+     * The trim cursor of the LAST chunk this Backfiller acked (durably persisted + confirmed to the
+     * strap). Survives across sessions on the same connection so the auto-continue gate (#364) can ask
+     * "did the offload actually advance the strap's trim this session?" — the spin-detector signal that
+     * stops it re-kicking forever when the cursor is frozen. null until the first ack. NOT reset in
+     * [begin] (it's a cross-session high-water mark, not a per-session tally). Mirrors Swift
+     * `Backfiller.lastAckedTrim`.
+     */
+    @Volatile
+    var lastAckedTrim: Long? = null
+        private set
+
+    /**
      * Distinct historical record-layout versions logged this session. Before this, only the unmapped/
      * reject path surfaced a version, so a HEALTHY log never revealed which layout the strap emits
      * (v24/v25 on 4.0, v18/v26 on 5/MG) — exactly the firmware→layout signal triage needs. Reset in
@@ -295,6 +307,7 @@ class Backfiller(
         }
 
         ackTrim(trim, endData)
+        lastAckedTrim = trim   // #364: record the advanced cursor for the auto-continue spin-detector
         committed?.takeIf { !it.isEmpty }?.let(onChunkCommitted)
     }
 

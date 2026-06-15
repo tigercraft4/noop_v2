@@ -805,6 +805,40 @@ final class Repository: ObservableObject {
                                             from: row.startTs, to: row.startTs)
     }
 
+    // MARK: - Workout detail (read-only helpers, additive) — #410
+    //
+    // The workout-detail screen needs two reads over a single session's [startTs, endTs] window:
+    // a downsampled HR curve (for the ChartCard) and the raw HR samples binned into zone-minutes
+    // (for the zones bar). Both reuse the existing HR reads; they're thin convenience wrappers that
+    // keep the bucket size / sample cap consistent with the rest of the app and give the view one
+    // call site to await. NEVER mutate — pure reads.
+
+    /// Downsampled HR over a workout window for the detail HR-curve. A short session wants a finer
+    /// bucket than the Today 24h chart (300 s would flatten a 30-min run to ~6 points), so the bucket
+    /// scales with duration: ~120 buckets across the window, floored at 15 s and capped at 300 s.
+    func workoutHrBuckets(from: Int, to: Int) async -> [HRBucket] {
+        guard to > from else { return [] }
+        let span = to - from
+        let bucket = max(15, min(300, span / 120))
+        return await hrBuckets(from: from, to: to, bucketSeconds: bucket)
+    }
+
+    /// Raw HR samples binned into per-zone MINUTES for a workout window, using the age-derived
+    /// (Tanaka) %HRmax zones — the same display zone model `WorkoutsView` already uses for imported
+    /// zone percentages, but computed here from the strap's own samples so a session WITHOUT imported
+    /// `zonesJSON` still gets a real time-in-zone split. Returns nil when the window carries no HR (so
+    /// the view shows nothing rather than five empty bars). `age <= 0` falls back to a 30 y default —
+    /// the zones are approximate either way and clearly labelled as such in the UI.
+    func workoutZoneMinutes(from: Int, to: Int, age: Int) async -> [Double]? {
+        guard to > from else { return nil }
+        let samples = await hrSamples(from: from, to: to)
+        guard !samples.isEmpty else { return nil }
+        let zoneSet = HRZones.zones(age: age > 0 ? Double(age) : 30)
+        let tiz = HRZones.timeInZone(samples, zoneSet: zoneSet)
+        let minutes = tiz.seconds.map { $0 / 60.0 }
+        return minutes.contains(where: { $0 > 0 }) ? minutes : nil
+    }
+
     /// Apple Health daily aggregates (steps/energy/vo2/hr).
     func appleDailyRows(days: Int = 4000) async -> [AppleDaily] {
         guard let store = await ensureStore() else { return [] }

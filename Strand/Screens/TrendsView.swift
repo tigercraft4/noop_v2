@@ -44,6 +44,10 @@ struct TrendsView: View {
 
     @State private var range: Range = .quarter
 
+    // #436 — shareable offline trends report (PDF over a date range). The sheet owns its
+    // own range picker; this just presents it with the loaded history.
+    @State private var showingReport = false
+
     // Effort display scale (#268) — routes the Effort small-multiple's numbers + unit. Display-only.
     @AppStorage(UnitPrefs.effortScaleKey) private var effortScaleRaw = EffortScale.hundred.rawValue
     private var effortScale: EffortScale { UnitPrefs.resolveEffortScale(effortScaleRaw) }
@@ -214,9 +218,46 @@ struct TrendsView: View {
                     heroRecovery(recovery: recovery)
                     smallMultiples(hrv: hrv, rhr: rhr, strain: strain)
                     yearStrip
+                    exportReportRow
                 }
             }
         }
+        // #436 — present the offline trends-report exporter (range picker + PDF export).
+        .sheet(isPresented: $showingReport) {
+            TrendsReportSheet(days: repo.days)
+        }
+    }
+
+    // MARK: Export trends report (#436)
+
+    /// A footer entry that opens the shareable-report sheet. Reuses the InsightCard look
+    /// (frosted, gold-washed) so it reads as part of the Charge world, with a clear CTA.
+    private var exportReportRow: some View {
+        NoopCard(tint: StrandPalette.accent) {
+            HStack(spacing: 14) {
+                Image(systemName: "doc.richtext")
+                    .font(StrandFont.title2)
+                    .foregroundStyle(StrandPalette.accent)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Export trends report").strandOverline()
+                    Text("A shareable one-page PDF of recovery, sleep, HRV, resting HR and strain over a range — saved on your \(Platform.deviceNoun).")
+                        .font(StrandFont.footnote)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button {
+                    showingReport = true
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.noopGhost)
+                .fixedSize()
+            }
+        }
+        .accessibilityElement(children: .contain)
     }
 
     // MARK: Range control

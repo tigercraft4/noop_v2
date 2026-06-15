@@ -3,11 +3,16 @@ import Foundation
 /// What prompted a sync attempt. Mirrors WHOOP (15-min periodic floor + event-triggered "process now"
 /// syncs + the strap's own prompt events + manual), adapted to iOS.
 enum BackfillTrigger {
-    case periodic    // the repeating timer while connected+bonded
-    case connect     // a (re)connect / bond confirmation
-    case foreground  // the app became active (scenePhase .active)
-    case manual      // the user tapped "Sync now"
-    case strap       // an incoming strap EVENT packet (WHOOP's HighFreqSyncPrompt analog)
+    case periodic      // the repeating timer while connected+bonded
+    case connect       // a (re)connect / bond confirmation
+    case foreground    // the app became active (scenePhase .active)
+    case manual        // the user tapped "Sync now"
+    case strap         // an incoming strap EVENT packet (WHOOP's HighFreqSyncPrompt analog)
+    case autoContinue  // #364: an immediate back-to-back continuation of a deep oldest-first backlog,
+                       // fired right after a 60s idle-cap exit while still connected. Like .manual it
+                       // bypasses the floor — the whole point is to NOT wait the 15-min periodic floor —
+                       // but it's separately bounded by BLEManager's consecutive-cap + trim spin-detector,
+                       // so it can't loop forever the way an un-floored periodic could.
 }
 
 /// Pure rate-limiter for historical-offload kicks. No BLE/store deps. Floors match WHOOP
@@ -32,7 +37,9 @@ enum BackfillPolicy {
             ? min(pow(2.0, Double(emptyStreak - emptyBackoffThreshold + 1)), maxEmptyBackoff)
             : 1.0
         switch trigger {
-        case .manual:                return true
+        // .manual (user-tapped) and .autoContinue (#364 expedited backlog drain) always run — both are
+        // deliberately un-floored; .autoContinue's runaway protection lives in BLEManager's cap, not here.
+        case .manual, .autoContinue: return true
         case .connect, .foreground:  return elapsed >= eventFloorSeconds
         case .strap:                 return elapsed >= eventFloorSeconds * backoff
         case .periodic:              return elapsed >= periodicFloorSeconds * backoff

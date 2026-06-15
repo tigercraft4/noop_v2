@@ -143,6 +143,10 @@ struct InsightsView: View {
 
     // MARK: Native-logging state for the journal card
 
+    /// Ranked activity-recovery costs (#439). Computed at load via ActivityCostEngine over the tagged
+    /// activity days and daily Charge; empty when nothing clears the engine's minSessions gate.
+    @State private var activityCosts: [ActivityCost] = []
+
     /// Distinct imported question strings, so the card adopts the export's exact wording.
     @State private var importedQuestions: [String] = []
     /// The selected day's native answers (question → answeredYes) — drives the chip state.
@@ -178,6 +182,7 @@ struct InsightsView: View {
                     } else {
                         behaviourSection
                     }
+                    activityCostSection
                     relationshipsSection
                 }
             }
@@ -230,12 +235,20 @@ struct InsightsView: View {
             seriesMap[key] = dict.sorted { $0.key < $1.key }.map { (day: $0.key, value: $0.value) }
         }
 
+        // Activity Cost (#439): shape the engine's inputs in the VIEW, not the engine. From the loaded
+        // sessions build [sport: Set<localDayKey>] — collapsing detected/"Activity" into one bucket via
+        // displaySport, keeping manual/imported labels — keyed by the LOCAL calendar day the session
+        // STARTED (the same local-day calendar DailyMetric.day uses, so the engine's D+1 alignment is
+        // honest). The recovery side is [localDayKey: Charge] off the merged DailyMetric.recovery.
+        let costs = Self.computeActivityCosts(workouts: await repo.workoutRows(), days: mergedDays)
+
         await MainActor.run {
             self.behaviours = byBehaviour
             self.importedQuestions = importedQs
             self.dayAnswers = nativeAnswers
             self.outcomeByKey = byKey
             self.seriesByKey = seriesMap
+            self.activityCosts = costs
             self.loaded = true
             // Seed the memoized derived state from the freshly loaded inputs.
             self.recomputeRanked()
@@ -253,6 +266,36 @@ struct InsightsView: View {
         case "rhr":      return d.restingHr.map(Double.init)
         default:         return nil
         }
+    }
+
+    // MARK: - Activity Cost input shaping (#439)
+    //
+    // The engine is pure + unit-tested; ALL the DB→input shaping lives here in the view. Sessions
+    // become [sport: Set<localDayKey>] and the merged daily metrics become [localDayKey: Charge], then
+    // ActivityCostEngine.evaluate ranks the per-sport recovery cost. Keying both sides on the LOCAL
+    // calendar day (DailyMetric.day's calendar) keeps the engine's D+1 next-morning lookups aligned.
+
+    // `internal` (not private) so the Workouts post-log note (#439) reuses the exact same input
+    // shaping rather than duplicating it — one source of truth for [sport: days] / [day: Charge].
+    static func computeActivityCosts(workouts: [WorkoutRow], days: [DailyMetric]) -> [ActivityCost] {
+        // Local-day offset so the activity day key lands on the SAME calendar as DailyMetric.day
+        // (which IntelligenceEngine/WhoopImporter both bucket by local midnight, #277).
+        let tzOffset = TimeZone.current.secondsFromGMT()
+        var activityDaysBySport: [String: Set<String>] = [:]
+        for w in workouts {
+            // displaySport collapses the detector's "detected" token into one "Activity" bucket and
+            // de-camelCases WHOOP sport names; manual/imported labels pass through unchanged.
+            let sport = WorkoutSource.displaySport(w.sport)
+            guard !sport.isEmpty else { continue }
+            let day = AnalyticsEngine.dayString(w.startTs, offsetSec: tzOffset)
+            activityDaysBySport[sport, default: []].insert(day)
+        }
+        var recoveryByDay: [String: Double] = [:]
+        for d in days {
+            if let r = d.recovery { recoveryByDay[d.day] = r }
+        }
+        return ActivityCostEngine.evaluate(activityDaysBySport: activityDaysBySport,
+                                           recoveryByDay: recoveryByDay)
     }
 
     // MARK: - Memoized recomputation
@@ -854,6 +897,83 @@ struct InsightsView: View {
     }
 
     // MARK: - Metric relationships section
+
+    // MARK: - Activity Cost section (#439)
+
+    /// "What each activity costs your recovery": one ranked NoopCard per sport that cleared the
+    /// engine's minSessions gate, each carrying next-morning Charge vs rest baseline, days-to-baseline,
+    /// the sample count + confidence pill, and the engine's plain-English sentence. Sign-aware tint:
+    /// a positive cost (recovery dipped) reads warmer/critical, a recovery-POSITIVE delta reads green.
+    @ViewBuilder private var activityCostSection: some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+            SectionHeader("Activity Cost", overline: "What each activity costs your recovery")
+            if activityCosts.isEmpty {
+                NoopCard {
+                    Text("Tag a few sessions of the same activity and NOOP will learn its personal recovery cost.")
+                        .font(StrandFont.subhead)
+                        .foregroundStyle(StrandPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                ForEach(activityCosts, id: \.sport) { cost in
+                    activityCostCard(cost)
+                }
+            }
+        }
+    }
+
+    private func activityCostCard(_ cost: ActivityCost) -> some View {
+        // Sign-aware accent: a POSITIVE delta means the next morning sat BELOW baseline (it cost you)
+        // → warm/critical; a negative delta means you woke higher → green. A near-zero cost reads
+        // neutral gold so "barely moves" doesn't shout either way.
+        let costing = cost.delta >= ActivityCostEngine.barelyMovesPoints
+        let lifting = cost.delta <= -ActivityCostEngine.barelyMovesPoints
+        let accent: Color = costing ? StrandPalette.statusCritical
+            : (lifting ? StrandPalette.statusPositive : StrandPalette.chargeColor)
+        let scoreState: ScoreState = cost.confidence == .solid ? .solid : .building
+        let pointsLabel = String(format: "%@%.0f", cost.delta >= 0 ? "−" : "+", abs(cost.delta))
+
+        return NoopCard(tint: accent) {
+            VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: sportSymbol(cost.sport))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(accent)
+                        .frame(width: 20)
+                    Text(cost.sport)
+                        .font(StrandFont.headline)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    ScoreStatePill(scoreState)
+                }
+                Text(cost.sentence())
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: NoopMetrics.gap)],
+                          alignment: .leading, spacing: NoopMetrics.gap) {
+                    StatTile(label: "Next morning",
+                             value: "\(Int(cost.meanNextMorning.rounded()))",
+                             caption: "Charge · \(pointsLabel) pts",
+                             accent: accent)
+                    StatTile(label: "Rest baseline",
+                             value: "\(Int(cost.baselineMean.rounded()))",
+                             caption: "untouched days",
+                             accent: StrandPalette.textPrimary)
+                    StatTile(label: "Bounce back",
+                             value: cost.daysToBaseline.map { "\($0)d" } ?? "—",
+                             caption: cost.daysToBaseline != nil ? "to baseline" : "not within 7d",
+                             accent: StrandPalette.chargeColor)
+                    StatTile(label: "Sessions",
+                             value: "\(cost.n)",
+                             caption: cost.confidence == .solid ? "solid" : "building",
+                             accent: StrandPalette.textPrimary)
+                }
+            }
+        }
+    }
 
     private var relationshipsSection: some View {
         // `relationships` is memoized in @State (see recomputeRelationships());

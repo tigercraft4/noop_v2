@@ -22,6 +22,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.data.DailyMetric
 import com.noop.data.JournalEntry
+import com.noop.data.WorkoutRow
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
@@ -239,6 +241,13 @@ fun InsightsScreen(vm: AppViewModel) {
     // Curated relationships (independent of the selected outcome).
     val relationships = remember(model) { computeRelationships(model) }
 
+    // --- Activity Cost (#439): the engine is pure + unit-tested; shape its inputs HERE. ---
+    // Load the sessions (ALL sources, dismissed-filtered) the same way the Workouts screen does, then
+    // build [sport: Set<localDayKey>] + [localDayKey: Charge] and rank the per-sport recovery cost.
+    val workouts by vm.workouts.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadWorkouts() }
+    val activityCosts = remember(workouts, days) { computeActivityCosts(workouts, days) }
+
     ScreenScaffold(title = "Insights", subtitle = "Interrogate what affects what.") {
 
         // --- Native journal logging (always reachable — the account-free way in) ---
@@ -401,8 +410,149 @@ fun InsightsScreen(vm: AppViewModel) {
 
         Spacer(Modifier.height(Metrics.sectionGap - 20.dp))
 
+        // --- Activity Cost (what each activity costs your recovery) ------------
+        ActivityCostSection(activityCosts)
+
+        Spacer(Modifier.height(Metrics.sectionGap - 20.dp))
+
         // --- Metric relationships ---------------------------------------------
         RelationshipsSection(relationships)
+    }
+}
+
+// MARK: - Activity Cost section (#439)
+//
+// "What each activity costs your recovery": one ranked NoopCard per sport that cleared the engine's
+// minSessions gate, each carrying next-morning Charge vs rest baseline, days-to-baseline, the sample
+// count + confidence pill, and the engine's plain-English sentence. Sign-aware tint: a positive cost
+// (recovery dipped) reads warm/critical, a recovery-POSITIVE delta reads green. Mirrors the Swift
+// InsightsView.activityCostSection exactly.
+
+/**
+ * Shape the [ActivityCostEngine] inputs from the loaded sessions + cached daily metrics, then rank.
+ * [workouts] → [sport: Set<localDayKey>] (displaySport collapses detected/"Activity" into one bucket
+ * and de-camelCases WHOOP names; manual/imported labels pass through), keyed by the LOCAL calendar
+ * day the session STARTED via the SAME AnalyticsEngine.dayString path [DailyMetric.day] uses, so the
+ * engine's D+1 next-morning alignment is honest. [days] → [localDayKey: Charge] off DailyMetric.recovery.
+ */
+internal fun computeActivityCosts(
+    workouts: List<WorkoutRow>,
+    days: List<DailyMetric>,
+): List<com.noop.analytics.ActivityCost> {
+    // Single "now" offset for every session — the SAME tz-offset basis IntelligenceEngine.kt uses to
+    // key DailyMetric.day (getOffset(now)/1000 applied across the run), via the SAME
+    // AnalyticsEngine.dayString(ts, offsetSec) path, so the engine's D+1 next-morning lookups align
+    // byte-for-byte with the recovery keys (and match the Swift TimeZone.current.secondsFromGMT path).
+    val offsetSec = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1_000L
+    val activityDaysBySport = HashMap<String, MutableSet<String>>()
+    for (w in workouts) {
+        val sport = WorkoutEditing.displaySport(w.sport)
+        if (sport.isEmpty()) continue
+        val day = com.noop.analytics.AnalyticsEngine.dayString(w.startTs, offsetSec)
+        activityDaysBySport.getOrPut(sport) { mutableSetOf() }.add(day)
+    }
+    val recoveryByDay = HashMap<String, Double>()
+    for (d in days) {
+        d.recovery?.let { recoveryByDay[d.day] = it }
+    }
+    return com.noop.analytics.ActivityCostEngine.evaluate(
+        activityDaysBySport = activityDaysBySport.mapValues { it.value.toSet() },
+        recoveryByDay = recoveryByDay,
+    )
+}
+
+@Composable
+private fun ActivityCostSection(costs: List<com.noop.analytics.ActivityCost>) {
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+        SectionHeader("Activity Cost", overline = "What each activity costs your recovery")
+        if (costs.isEmpty()) {
+            NoopCard {
+                Text(
+                    "Tag a few sessions of the same activity and NOOP will learn its personal recovery cost.",
+                    style = NoopType.subhead,
+                    color = Palette.textSecondary,
+                )
+            }
+        } else {
+            costs.forEach { ActivityCostCard(it) }
+        }
+    }
+}
+
+@Composable
+private fun ActivityCostCard(cost: com.noop.analytics.ActivityCost) {
+    // Sign-aware accent: a POSITIVE delta means the next morning sat BELOW baseline (it cost you) →
+    // warm/critical; a negative delta means you woke higher → green. Near-zero reads neutral gold so
+    // "barely moves" doesn't shout either way.
+    val costing = cost.delta >= com.noop.analytics.ActivityCostEngine.barelyMovesPoints
+    val lifting = cost.delta <= -com.noop.analytics.ActivityCostEngine.barelyMovesPoints
+    val accent: Color = when {
+        costing -> Palette.statusCritical
+        lifting -> Palette.statusPositive
+        else -> Palette.chargeColor
+    }
+    val solid = cost.confidence == com.noop.analytics.ScoreConfidence.SOLID
+    val pointsLabel = (if (cost.delta >= 0) "−" else "+") + abs(cost.delta).roundToInt()
+
+    NoopCard(tint = accent) {
+        Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    sportIcon(cost.sport),
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    cost.sport,
+                    style = NoopType.headline,
+                    color = Palette.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                StatePill(
+                    if (solid) "SOLID" else "BUILDING",
+                    tone = if (solid) StrandTone.Positive else StrandTone.Accent,
+                    showsDot = false,
+                )
+            }
+            Text(cost.sentence(), style = NoopType.subhead, color = Palette.textSecondary)
+            // 2×2 StatTile grid so tile heights stay uniform on phone widths (matches SummarySection).
+            Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+                StatTile(
+                    modifier = Modifier.weight(1f),
+                    label = "Next morning",
+                    value = "${cost.meanNextMorning.roundToInt()}",
+                    caption = "Charge · $pointsLabel pts",
+                    accent = accent,
+                )
+                StatTile(
+                    modifier = Modifier.weight(1f),
+                    label = "Rest baseline",
+                    value = "${cost.baselineMean.roundToInt()}",
+                    caption = "untouched days",
+                    accent = Palette.textPrimary,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+                StatTile(
+                    modifier = Modifier.weight(1f),
+                    label = "Bounce back",
+                    value = cost.daysToBaseline?.let { "${it}d" } ?: "—",
+                    caption = if (cost.daysToBaseline != null) "to baseline" else "not within 7d",
+                    accent = Palette.chargeColor,
+                )
+                StatTile(
+                    modifier = Modifier.weight(1f),
+                    label = "Sessions",
+                    value = "${cost.n}",
+                    caption = if (solid) "solid" else "building",
+                    accent = Palette.textPrimary,
+                )
+            }
+        }
     }
 }
 
