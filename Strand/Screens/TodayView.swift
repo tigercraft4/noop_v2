@@ -51,6 +51,12 @@ struct TodayView: View {
     // tile previously showed hours where the score belonged (#248). nil until loaded / no night yet.
     @State private var restScore: Double?
 
+    // On-device steps ESTIMATE per day (key "steps_est", computed "-noop" source). The Steps tile
+    // prefers a REAL step count (strap @57 counter / Apple Health); only when a day has neither does it
+    // fall back to this estimate, shown with an "est." caption so it's never read as a measured count.
+    // Loaded once via exploreSeries (same merged read fitness_age/vitality use), keyed by day. (#150)
+    @State private var stepsEstByDay: [String: Int] = [:]
+
     // Today's heart rate as 5-minute bucket means (midnight → now), for the 24h trend chart.
     @State private var hrPoints: [TrendPoint] = []
 
@@ -1015,16 +1021,21 @@ struct TodayView: View {
                 sparkColor: StrandPalette.accent
             )
         case .steps:
+            // Prefer a REAL step count: the strap's own @57 counter (DailyMetric.steps, WHOOP 5/MG),
+            // then Apple Health for the day, then the loaded Apple-Health steps sparkline tail. Only when
+            // a day has NONE of those real sources do we fall back to the on-device ESTIMATE (steps_est)
+            // a WHOOP 4.0 user gets — flagged "est." so it's never mistaken for a measured count. A day
+            // with neither real nor estimated steps shows "—". Mirrors Android (#276/#150).
+            let realSteps: String? = (d?.steps).map { intString(Double($0)) }
+                ?? aLatest?.steps.map { intString(Double($0)) }
+                ?? (sparks["steps"]?.last).map { intString($0) }
+            let estSteps = stepsEstByDay[selectedDayKey]
             StatTile(
                 label: "Steps",
-                // Prefer the strap's own on-device @57 step counter (DailyMetric.steps, WHOOP 5/MG);
-                // fall back to Apple Health steps for the day only when the strap supplied none (e.g.
-                // a WHOOP 4.0, which doesn't expose steps over BLE). Mirrors Android (#276/#150).
-                value: (d?.steps).map { intString(Double($0)) }
-                    ?? aLatest?.steps.map { intString(Double($0)) }
-                    ?? latestString("steps", decimals: 0),
-                caption: "today",
-                accent: StrandPalette.metricCyan,
+                value: realSteps ?? estSteps.map { intString(Double($0)) } ?? "—",
+                // An estimated day reads "est." so the number is never taken as a measured count.
+                caption: realSteps != nil ? "today" : (estSteps != nil ? "est." : "today"),
+                accent: (realSteps != nil || estSteps != nil) ? StrandPalette.metricCyan : StrandPalette.textPrimary,
                 sparkline: sparks["steps"],
                 sparkColor: StrandPalette.metricCyan
             )
@@ -1239,6 +1250,14 @@ struct TodayView: View {
         // composite and an importer sees the export's figure — exactly like the Rest detail screen.
         let restSeries = await repo.exploreSeries(key: "sleep_performance", source: "my-whoop")
         let restByDay = Dictionary(restSeries.map { ($0.day, $0.value) }, uniquingKeysWith: { _, last in last })
+
+        // Steps ESTIMATE per day (WHOOP 4.0 motion → calibrated steps). exploreSeries reads the computed
+        // "-noop" metricSeries the IntelligenceEngine writes, exactly like the Explore "steps_est" metric.
+        // Only consulted when a day has no REAL step count (see the .steps tile), so it never overrides a
+        // measured value — it just fills the gap a 4.0 user would otherwise see as "—".
+        let stepsEstSeries = await repo.exploreSeries(key: "steps_est", source: "my-whoop")
+        stepsEstByDay = Dictionary(stepsEstSeries.map { ($0.day, Int($0.value.rounded())) },
+                                   uniquingKeysWith: { _, last in last })
         // The selected day's Rest, falling back to the series tail only when today itself is selected —
         // a navigated past day with no Rest row shows "—" rather than borrowing the newest value.
         restScore = restByDay[selectedDayKey] ?? (selectedDayOffset == 0 ? restSeries.last?.value : nil)

@@ -190,7 +190,22 @@ public final class LiveState: ObservableObject {
     }
 
     public func append(log line: String) {
-        log.append(line)
+        log.append(Self.redactPii(line))
         if log.count > 200 { log.removeFirst(log.count - 200) }
+    }
+
+    /// Scrub personal identifiers from a strap-log line so it's safe to share publicly (#445): BLE MAC
+    /// addresses are masked to their first + last byte, and the WHOOP's SERIAL — carried in its device
+    /// name ("WHOOP 4C1594026") and tied to the owner's account — is removed. Applied at the single log
+    /// sink (BLEManager + the generic-HR diagnostics both feed it). MACs require colons, so hex command
+    /// payloads are untouched; the dotted model names ("WHOOP 4.0"/"5.0") don't match the serial pattern.
+    static func redactPii(_ s: String) -> String {
+        var out = s
+        out = out.replacingOccurrences(
+            of: "([0-9A-Fa-f]{2}):[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:([0-9A-Fa-f]{2})",
+            with: "$1:••:••:••:••:$2", options: .regularExpression)
+        out = out.replacingOccurrences(
+            of: "WHOOP (\\d[0-9A-Za-z]{5,})", with: "WHOOP <serial>", options: .regularExpression)
+        return out
     }
 }

@@ -375,6 +375,65 @@ final class IntelligenceEngine: ObservableObject {
                 MetricPoint(day: satKey, key: "body_age", value: vRes.bodyAge),
             ], deviceId: computedId)
         }
+
+        // ── Steps ESTIMATE (WHOOP 4.0) — DAILY, keyed to each strap-only day ────────────────────────
+        // A WHOOP 4.0 sends no step count over BLE, so for days the phone DIDN'T also count steps we
+        // estimate them: calibrate the strap's daily MOTION VOLUME against the phone's real step count
+        // on the days both exist, then apply that personal coefficient to the strap-only days. Engine =
+        // StepsEstimateEngine (StrandAnalytics), fully unit-tested; this block is pure orchestration —
+        // gather points, fit, store under the same "-noop" source, mirror to ProfileStore for the UI.
+        //
+        // Idempotent: re-upserts the same (computedId, day, "steps_est") rows. Inert until there's a
+        // calibration — a single-source / no-phone user sees no estimate until they set a manual `k`.
+        //
+        // Calibration window: a generous 60 days (not just the 7 the weekly engines use) so enough
+        // both-have days accumulate to fit. Reference steps = the apple-health daily `steps` value
+        // (the same source the dashboard's `steps` metric reads, Repository.swift). Motion = the
+        // [localMidnight, +24h) gravity volume, the same calendar-day window the daily totals use.
+        let stepsCalDays = 60
+        let calOldest = AnalyticsEngine.dayString(
+            nowLocalMidnight - (stepsCalDays - 1) * 86_400, offsetSec: tzOffset)
+        // Phone reference steps per day, from the apple-health daily rows (steps > 0 only).
+        let appleRows = (try? await store.dailyMetrics(deviceId: Repository.appleHealthSource,
+                                                       from: calOldest, to: newestDay)) ?? []
+        var refStepsByDay: [String: Double] = [:]
+        for r in appleRows where (r.steps ?? 0) > 0 { refStepsByDay[r.day] = Double(r.steps!) }
+        // Per-day motion volume over the calibration window, read from the owner-resolved strap streams.
+        // (Owner resolution mirrors the scoring loop; one device installs resolve to `deviceId`.)
+        var motionByDay: [String: Double] = [:]
+        for off in 0..<stepsCalDays {
+            let dayMid = Self.midnightLocal(nowLocalMidnight - off * 86_400, offsetSec: tzOffset)
+            let dayEnd = dayMid + 86_400 - 1
+            let dayKey = AnalyticsEngine.dayString(dayMid, offsetSec: tzOffset)
+            let owner = await resolveDayOwner(day: dayKey, from: dayMid, to: dayEnd, store: store,
+                                              devices: regDevices, activeId: regActiveId,
+                                              registry: registry)
+            let grav = (try? await store.gravitySamples(deviceId: owner, from: dayMid, to: dayEnd,
+                                                        limit: 200_000)) ?? []
+            let m = StepsEstimateEngine.dayMotionIntensity(grav)
+            if m > 0 { motionByDay[dayKey] = m }
+        }
+        // Build calibration points only for days with BOTH a motion volume and a real phone step count.
+        let calPoints = motionByDay.compactMap { (day, motion) -> StepsEstimateEngine.CalibrationPoint? in
+            guard let s = refStepsByDay[day] else { return nil }
+            return StepsEstimateEngine.CalibrationPoint(motion: motion, steps: s)
+        }
+        if let cal = StepsEstimateEngine.calibrate(calPoints, manualOverride: profile.stepsManualOverride) {
+            // Estimate + upsert for each recent scored day that has motion but NO real phone step count.
+            var estPts: [MetricPoint] = []
+            for dm in dailies where refStepsByDay[dm.day] == nil {
+                guard let motion = motionByDay[dm.day],
+                      let est = StepsEstimateEngine.estimate(motion: motion, calibration: cal) else { continue }
+                estPts.append(MetricPoint(day: dm.day, key: "steps_est", value: Double(est)))
+            }
+            if !estPts.isEmpty { _ = try? await store.upsertMetricSeries(estPts, deviceId: computedId) }
+            // Mirror the fit into ProfileStore so the Settings/Steps screen can show + adjust it.
+            profile.stepsCalibrationCoefficient = cal.coefficient
+            profile.stepsCalibrationSampleDays = cal.sampleDays
+            profile.stepsCalibrationConfidence = cal.confidence
+            profile.stepsCalibrationManual = cal.manual
+        }
+
         // Drop any freshly-detected session that overlaps a night the user has already hand-corrected.
         // A detected onset can drift second-to-second as more raw data arrives, so without this the
         // re-detected night would upsert as a SECOND row beside the edited one (different startTs ⇒ no

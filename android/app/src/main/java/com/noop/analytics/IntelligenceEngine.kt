@@ -102,8 +102,16 @@ object IntelligenceEngine {
         maxHROverride: Double? = null,
         nowSeconds: Long = System.currentTimeMillis() / 1000L,
         ownerSource: DayOwnerSource? = null,
+        // Steps-estimate calibration I/O (kept pure-JVM, mirroring the Effort-rescore flagGet/flagSet):
+        // [manualStepCoefficient] is the user's persisted manual override (null/0 = auto-fit), fed into
+        // StepsEstimateEngine.calibrate. [persistStepsCalibration] receives the fitted (or manual) model
+        // each pass so the caller (AppViewModel) can mirror it into ProfileStore for the Settings/Steps
+        // screen. Both default to no-op so existing callers / tests are unaffected.
+        manualStepCoefficient: Double? = null,
+        persistStepsCalibration: (StepsEstimateEngine.Calibration) -> Unit = {},
     ): List<Computed> = withContext(Dispatchers.Default) {
-        analyzeRecentOnCpu(repo, profile, maxDays, importedDeviceId, maxHROverride, nowSeconds, ownerSource)
+        analyzeRecentOnCpu(repo, profile, maxDays, importedDeviceId, maxHROverride, nowSeconds,
+            ownerSource, manualStepCoefficient, persistStepsCalibration)
     }
 
     /** History span for the one-shot Effort rescore — large enough to cover any real wear history,
@@ -156,6 +164,8 @@ object IntelligenceEngine {
         maxHROverride: Double? = null,
         nowSeconds: Long = System.currentTimeMillis() / 1000L,
         ownerSource: DayOwnerSource? = null,
+        manualStepCoefficient: Double? = null,
+        persistStepsCalibration: (StepsEstimateEngine.Calibration) -> Unit = {},
     ): List<Computed> {
         val hrvCfg = Baselines.metricCfg["hrv"] ?: return emptyList()
         val rhrCfg = Baselines.metricCfg["resting_hr"] ?: return emptyList()
@@ -494,6 +504,54 @@ object IntelligenceEngine {
             repo.upsertMetricSeries(listOf(
                 MetricSeriesRow(deviceId = computedId, day = satKey, key = "vitality", value = vRes.vitality),
                 MetricSeriesRow(deviceId = computedId, day = satKey, key = "body_age", value = vRes.bodyAge)))
+        }
+
+        // ── Steps ESTIMATE (WHOOP 4.0) — DAILY, keyed to each strap-only day ──
+        // A WHOOP 4.0 sends no step count over BLE, so for days the phone DIDN'T also count steps we
+        // estimate them: calibrate the strap's daily MOTION VOLUME against the phone's real step count on
+        // the days both exist, then apply that personal coefficient to the strap-only days. Engine =
+        // StepsEstimateEngine (fully unit-tested); this block is pure orchestration — gather points, fit,
+        // store under the same "-noop" source, and hand the fit back to the caller for ProfileStore.
+        // Idempotent: re-upserts the same (computedId, day, "steps_est") rows. Inert until there's a
+        // calibration — a single-source / no-phone user sees no estimate until they set a manual `k`.
+        // Mirrors the Swift IntelligenceEngine steps-estimate block byte-for-byte (60-day window, the
+        // apple-health daily `steps` reference, the [localMidnight,+24h) motion volume).
+        val stepsCalDays = 60
+        val calOldest = AnalyticsEngine.dayString(
+            nowLocalMidnight - (stepsCalDays - 1) * SECONDS_PER_DAY, tzOffsetSeconds)
+        // Phone reference steps per day, from the apple-health daily rows (steps > 0 only).
+        val appleRows = repo.dailyMetrics(WhoopRepository.APPLE_HEALTH_SOURCE, calOldest, newestDay)
+        val refStepsByDay = HashMap<String, Double>()
+        for (r in appleRows) { val s = r.steps; if (s != null && s > 0) refStepsByDay[r.day] = s.toDouble() }
+        // Per-day motion volume over the calibration window, read from the owner-resolved strap streams.
+        // (Owner resolution mirrors the scoring loop; a single-device install resolves to importedDeviceId.)
+        val motionByDay = HashMap<String, Double>()
+        for (off in 0 until stepsCalDays) {
+            val dayMid = midnightLocal(nowLocalMidnight - off * SECONDS_PER_DAY, tzOffsetSeconds)
+            val dayEnd = dayMid + SECONDS_PER_DAY - 1
+            val dayKey = AnalyticsEngine.dayString(dayMid, tzOffsetSeconds)
+            val owner = resolveDayOwner(repo, ownerSource, candidatePriorities, dayKey, dayMid, dayEnd, importedDeviceId)
+            val grav = repo.gravitySamples(owner, dayMid, dayEnd, STREAM_LIMIT)
+            val m = StepsEstimateEngine.dayMotionIntensity(grav)
+            if (m > 0) motionByDay[dayKey] = m
+        }
+        // Build calibration points only for days with BOTH a motion volume and a real phone step count.
+        val calPoints = motionByDay.mapNotNull { (day, motion) ->
+            refStepsByDay[day]?.let { StepsEstimateEngine.CalibrationPoint(motion = motion, steps = it) }
+        }
+        val stepsCal = StepsEstimateEngine.calibrate(calPoints, manualOverride = manualStepCoefficient)
+        if (stepsCal != null) {
+            // Estimate + upsert for each recent scored day that has motion but NO real phone step count.
+            val estRows = ArrayList<MetricSeriesRow>()
+            for (dm in dailies) {
+                if (refStepsByDay.containsKey(dm.day)) continue
+                val motion = motionByDay[dm.day] ?: continue
+                val est = StepsEstimateEngine.estimate(motion, stepsCal) ?: continue
+                estRows.add(MetricSeriesRow(deviceId = computedId, day = dm.day, key = "steps_est", value = est.toDouble()))
+            }
+            if (estRows.isNotEmpty()) repo.upsertMetricSeries(estRows)
+            // Hand the fit back so the caller mirrors it into ProfileStore for the Settings/Steps screen.
+            persistStepsCalibration(stepsCal)
         }
         // DURABILITY GUARD (iOS PR #395 cachedSleepKept): drop any freshly-detected session that
         // time-overlaps a night the user has already hand-corrected. A detected onset can drift

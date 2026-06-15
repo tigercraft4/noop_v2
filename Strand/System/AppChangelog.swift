@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "4.0.4"
+    static let currentVersion = "4.1.0"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,17 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "4.1.0",
+            title: "Estimated steps for your WHOOP 4.0",
+            date: "June 2026",
+            items: [
+                "**Steps on a WHOOP 4.0 — estimated, and calibrated to *you*.** A WHOOP 4.0 doesn't send a step count over Bluetooth, so NOOP now *estimates* your daily steps from the strap's own motion and calibrates that estimate against your phone's step count (Apple Health / Health Connect) — learning a coefficient personal to your gait and how the band rides. It's honest about what it is: an **estimate**, never a pretend pedometer — shown with an \"est.\" marker, and \"—\" when there isn't enough movement to say.",
+                "**A Steps calibration screen** (Settings → Profile → Steps estimate): see your estimate next to your phone's real count side-by-side, how confident the fit is, and a **manual dial** to tune it to you, with a live preview. No phone steps to calibrate against? Set the dial by hand.",
+                "Where you do have a real phone step count, that always wins — the estimate only fills the days your phone didn't cover.",
+                "**Generic heart-rate straps now actually connect.** A Polar / Wahoo / Coospo strap you made active was being *discovered* but never *connected to* — so it sat there with no live data. Fixed: NOOP now connects straight to your selected strap. Thanks @pilleuspulcher-blip (#421).",
+                "**The strap log is now safe to share.** It no longer exposes your WHOOP's serial or Bluetooth MAC addresses — they're masked automatically, so you can paste a diagnostic log on GitHub without leaking identifiers. Thanks @maddognik (#445).",
+            ]),
         Release(
             version: "4.0.4",
             title: "Sync visibility + a sharper Stress timeline",

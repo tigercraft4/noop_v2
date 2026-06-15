@@ -203,7 +203,15 @@ final class SourceCoordinator: ObservableObject {
                 Task { if let store = await storeHandle() { try? await store.insert(streams, deviceId: id) } }
             },
             log: straplog)   // generic-HR lifecycle → the SAME exported strap log (issue #421)
-        source.scan()              // discover + auto-connect the chosen strap on its own central
+        // CONNECT to the active strap's known peripheral, don't just scan. scan() only discovered + listed
+        // it but never connected, so a Polar etc. showed as "found" yet never streamed (#421). connect()
+        // reaches the cached peripheral by identifier (or scans-then-connects if not yet cached); a bare
+        // scan is the fallback only when the registry row has no/invalid identifier.
+        if let pid = peripheralId(for: id), let uuid = UUID(uuidString: pid) {
+            source.connect(uuid)
+        } else {
+            source.scan()
+        }
         standardSource = source
         activeStrapId = id
         onStrap = true

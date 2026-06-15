@@ -164,7 +164,7 @@ class SourceCoordinator(
         if (id == lastSeenId) return
         lastSeenId = id
         val devices = registry.all()
-        if (isWhoop(id, devices)) switchToWhoop(id, devices) else switchToStrap(id)
+        if (isWhoop(id, devices)) switchToWhoop(id, devices) else switchToStrap(id, devices)
     }
 
     /**
@@ -225,7 +225,7 @@ class SourceCoordinator(
      * Active device is a generic strap. Pause WHOOP (once, on the WHOOP→strap edge) and run the isolated
      * [StandardHrSource] for this strap's deviceId. Re-running for the SAME id is a no-op.
      */
-    private fun switchToStrap(id: String) {
+    private fun switchToStrap(id: String, devices: List<PairedDeviceRow>) {
         if (activeStrapId == id) return   // already streaming this strap → no churn
         if (!onStrap) stopWhoop()         // leaving WHOOP for the first strap → pause its BLE
         standardSource?.stop()            // strap→strap: stop the previous source first
@@ -244,7 +244,12 @@ class SourceCoordinator(
             },
             log = straplog,   // generic-HR lifecycle → the SAME exported strap log (issue #421)
         )
-        source.scan()   // discover + connect the chosen strap on its own scanner/GATT
+        // CONNECT to the active strap's known BLE address, don't just scan. The previous code only called
+        // scan() (it discovered the strap and listed it, but never connected) — so a Polar H10 etc. showed
+        // up in the log as "found" yet never streamed (#421). connect(address) connects directly via
+        // getRemoteDevice; we fall back to a bare scan only if the registry row somehow has no address.
+        val address = devices.firstOrNull { it.id == id }?.peripheralId
+        if (!address.isNullOrEmpty()) source.connect(address) else source.scan()
         standardSource = source
         activeStrapId = id
         onStrap = true

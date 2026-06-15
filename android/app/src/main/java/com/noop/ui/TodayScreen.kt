@@ -217,6 +217,20 @@ fun TodayScreen(viewModel: AppViewModel, onSupport: () -> Unit = {}) {
         )
     }
 
+    // On-device steps ESTIMATE for the selected day (key "steps_est", computed "-noop" source). The
+    // Steps tile prefers a REAL step count (strap @57 counter / imported Health Connect); only when a
+    // day has NEITHER does it fall back to this estimate, shown with an "est." caption so it's never read
+    // as a measured count. resolvedSeries reads the computed source for the my-whoop key, exactly like
+    // the Explore "steps_est" metric. Null until loaded / no estimate for the day. (#150)
+    var stepsEstForDay by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(days, selectedDayKey) {
+        val byDay = runCatching {
+            viewModel.repo.resolvedSeries("steps_est", "my-whoop", "0000-00-00", "9999-99-99")
+                .values.associate { it.first to it.second }
+        }.getOrDefault(emptyMap())
+        stepsEstForDay = byDay[selectedDayKey]?.let { Math.round(it).toInt() }
+    }
+
     // The Rest SCORE (0–100) for the selected day — IntelligenceEngine's Rest composite, written to the
     // `sleep_performance` metric series. The Key-Metrics "Rest" tile shows THIS, with hours-in-bed kept
     // as the caption; the tile previously showed hours where the score belonged (#248). resolvedSeries
@@ -462,6 +476,7 @@ fun TodayScreen(viewModel: AppViewModel, onSupport: () -> Unit = {}) {
             latestWeightKg = weightKg,
             profileWeightKg = profileWeightKg,
             importedStepsForDay = importedStepsForDay,
+            estimatedStepsForDay = stepsEstForDay,
             restScore = restScoreForDay,
             enabledMetrics = enabledKeyMetrics,
             onScoreInfo = openGuide,
@@ -999,6 +1014,7 @@ private fun MetricGrid(
     latestWeightKg: Double? = null,
     profileWeightKg: Double = 75.0,
     importedStepsForDay: Int? = null,
+    estimatedStepsForDay: Int? = null,
     restScore: Double? = null,
     enabledMetrics: List<KeyMetric> = KeyMetric.defaultOrder,
     onScoreInfo: (ScoreSection) -> Unit = {},
@@ -1090,16 +1106,24 @@ private fun MetricGrid(
             )
         },
         KeyMetric.STEPS to { m ->
-            // Steps: prefer the on-device WHOOP 5/MG @57 counter (DailyMetric.steps); if the strap
-            // didn't supply one — e.g. a WHOOP 4.0, which counts steps in the official WHOOP app but
-            // doesn't expose them to NOOP over Bluetooth — fall back to the steps imported from Apple
-            // Health / Health Connect for the day, instead of "No Data". (#107, #150)
-            val steps = d?.steps ?: importedStepsForDay
+            // Steps: prefer a REAL count — the on-device WHOOP 5/MG @57 counter (DailyMetric.steps), then
+            // the steps imported from Apple Health / Health Connect for the day. Only when a day has
+            // NEITHER do we fall back to the on-device ESTIMATE (steps_est) a WHOOP 4.0 user gets, flagged
+            // "est." so it's never mistaken for a measured count — a 4.0 counts steps in the official
+            // WHOOP app but doesn't expose them to NOOP over Bluetooth. A day with none shows "No Data".
+            // (#107, #150)
+            val realSteps = d?.steps ?: importedStepsForDay
+            val steps = realSteps ?: estimatedStepsForDay
             SparkStatTile(
                 modifier = m,
                 label = "Steps",
                 value = steps?.let { intString(it.toDouble()) } ?: NO_DATA,
-                caption = steps?.let { "steps" }, // neutral: the day selector can show past days
+                // An estimated day reads "est." so the number is never taken as a measured count.
+                caption = when {
+                    realSteps != null -> "steps"
+                    estimatedStepsForDay != null -> "est."
+                    else -> null
+                },
                 accent = steps?.let { Palette.metricCyan } ?: Palette.textTertiary,
                 spark = emptyList(),
                 sparkColor = Palette.metricCyan,

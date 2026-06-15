@@ -702,6 +702,11 @@ class WhoopBleClient(
      *  buffer + "Share strap log" exist (issues #17/#18). */
     private val logBuffer = ArrayDeque<String>()
     private val logTimeFmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+    // PII scrubbers for the shareable strap log (#445). MAC: keep first+last byte, mask the unique middle.
+    // WHOOP serial: the device name carries it ("WHOOP 4C1594026"); the dotted model names ("WHOOP 4.0")
+    // are too short / dotted to match.
+    private val MAC_RE = Regex("([0-9A-Fa-f]{2}):[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:([0-9A-Fa-f]{2})")
+    private val WHOOP_SERIAL_RE = Regex("WHOOP (\\d[0-9A-Za-z]{5,})")
 
     /** Fired if a scan finds nothing in [SCAN_TIMEOUT_MS]; stops scanning and explains why. */
     private val scanTimeoutRunnable = Runnable {
@@ -816,6 +821,15 @@ class WhoopBleClient(
                         profile = profile,
                         importedDeviceId = deviceId,
                         maxHROverride = profileStore.hrMaxOverride.takeIf { it > 0 }?.toDouble(),
+                        // Steps-estimate calibration: honor the user's manual override and persist the fit
+                        // after a backfill too, so the Settings/Steps screen reflects the latest data.
+                        manualStepCoefficient = profileStore.stepsManualOverride,
+                        persistStepsCalibration = { cal ->
+                            profileStore.stepsCalibrationCoefficient = cal.coefficient
+                            profileStore.stepsCalibrationSampleDays = cal.sampleDays
+                            profileStore.stepsCalibrationConfidence = cal.confidence
+                            profileStore.stepsCalibrationManual = cal.manual
+                        },
                     )
                 }.onSuccess {
                     log("Backfill: post-sync scoring pass done")
@@ -3333,16 +3347,28 @@ class WhoopBleClient(
     }
 
     private fun log(s: String) {
+        // Scrub personal identifiers FIRST so a user can safely share the strap log (#445).
+        val safe = redactPii(s)
         // logcat is opt-in (Settings → Strap → "Debug logging"); default OFF so normal users don't
         // emit the strap log to the system log. The in-app ring buffer below always records.
-        if (debugLogcat) Log.d(TAG, s)
+        if (debugLogcat) Log.d(TAG, safe)
         // Mirror into the in-app ring buffer (format under the lock — SimpleDateFormat isn't
         // thread-safe and log() is called from both the GATT binder thread and the main looper).
         synchronized(logBuffer) {
-            logBuffer.addLast("${logTimeFmt.format(System.currentTimeMillis())}  $s")
+            logBuffer.addLast("${logTimeFmt.format(System.currentTimeMillis())}  $safe")
             while (logBuffer.size > LOG_BUFFER_MAX) logBuffer.removeFirst()
         }
     }
+
+    /** Scrub personal identifiers from a strap-log line so it's safe to share publicly (#445, @maddognik):
+     *  BLE MAC addresses are masked to their first + last byte, and the WHOOP's SERIAL — carried in its
+     *  device name ("WHOOP 4C1594026") and tied to the owner's account — is removed. Applied at the single
+     *  log sink so EVERY line is covered, including the generic-HR diagnostics. MACs require colons, so hex
+     *  command payloads (no colons) are untouched; the model names "WHOOP 4.0"/"5.0" (dotted, short) don't
+     *  match the serial pattern. */
+    private fun redactPii(s: String): String = s
+        .replace(MAC_RE, "$1:••:••:••:••:$3")
+        .replace(WHOOP_SERIAL_RE, "WHOOP <serial>")
 
     /**
      * Write a line into the SAME in-app strap-log ring buffer the user exports via [exportLogText],

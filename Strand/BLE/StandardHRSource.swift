@@ -118,10 +118,19 @@ public final class StandardHRSource: NSObject, ObservableObject {
     /// Connect to the chosen discovered strap and start streaming its HR.
     public func connect(_ id: UUID) {
         stopScan()
-        guard let p = seenPeripherals[id] else {
-            log("HR-strap: connect requested for an undiscovered strap (\(id)) — ignored")
+        // Reach the peripheral directly: use the freshly-discovered handle if we have it, else ask
+        // CoreBluetooth for the cached peripheral by identifier (a strap we've connected before). This is
+        // what lets the active-strap switch CONNECT without depending on a fresh scan — the switchToStrap
+        // path only ever scanned before, so a Polar etc. was discovered but never connected (#421).
+        let p = seenPeripherals[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first
+        guard let p else {
+            // Never seen by this Mac/iPhone yet → remember it and scan; didDiscover connects it on sight.
+            pendingConnectID = id
+            log("HR-strap: strap \(id) not cached yet — scanning to find it")
+            scan()
             return
         }
+        seenPeripherals[id] = p
         peripheral = p
         p.delegate = self
         guard central.state == .poweredOn else {
@@ -204,6 +213,12 @@ extension StandardHRSource: @preconcurrency CBCentralManagerDelegate {
             discovered[idx] = strap
         } else {
             discovered.append(strap)
+        }
+        // If we were scanning specifically to reach this strap (a not-yet-cached active strap), connect now
+        // that it's been seen — the switchToStrap path (#421).
+        if pendingConnectID == id {
+            pendingConnectID = nil
+            connect(id)
         }
     }
 

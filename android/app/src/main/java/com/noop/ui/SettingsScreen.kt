@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
@@ -155,6 +156,40 @@ class ProfileStore(private val prefs: SharedPreferences) {
             .putFloat(KEY_STEP_SCALE, v.coerceIn(STEP_SCALE_MIN, STEP_SCALE_MAX).toFloat())
             .apply()
 
+    // ── Steps ESTIMATE calibration (WHOOP 4.0; StepsEstimateEngine) ─────────────────────────────
+    // Mirror of the macOS ProfileStore fields: the engine writes the auto-fit each analytics pass and
+    // the Settings/Steps screen reads them. [stepsManualCoefficient] is the ONLY user-settable field
+    // (0 = auto-fit / null to the engine; > 0 = manual override fed into calibrate()); the other three
+    // are fitted outputs surfaced read-only.
+    /** Fitted (or manually-set) steps-per-unit-of-motion coefficient last persisted by the engine. */
+    var stepsCalibrationCoefficient: Double
+        get() = prefs.getFloat(KEY_STEPS_COEFF, 0f).toDouble()
+        set(v) = prefs.edit().putFloat(KEY_STEPS_COEFF, v.toFloat()).apply()
+
+    /** How many calibration days fed the last auto-fit (0 when purely manual / not yet fit). */
+    var stepsCalibrationSampleDays: Int
+        get() = prefs.getInt(KEY_STEPS_SAMPLE_DAYS, 0)
+        set(v) = prefs.edit().putInt(KEY_STEPS_SAMPLE_DAYS, v).apply()
+
+    /** 0–1 trust in the last fit (1.0 for a manual coefficient). */
+    var stepsCalibrationConfidence: Double
+        get() = prefs.getFloat(KEY_STEPS_CONFIDENCE, 0f).toDouble()
+        set(v) = prefs.edit().putFloat(KEY_STEPS_CONFIDENCE, v.toFloat()).apply()
+
+    /** True when the persisted coefficient came from the user's manual override, not an auto-fit. */
+    var stepsCalibrationManual: Boolean
+        get() = prefs.getBoolean(KEY_STEPS_MANUAL_FLAG, false)
+        set(v) = prefs.edit().putBoolean(KEY_STEPS_MANUAL_FLAG, v).apply()
+
+    /** User-set manual coefficient. 0 = auto-fit (null to the engine); > 0 = manual override. */
+    var stepsManualCoefficient: Double
+        get() = prefs.getFloat(KEY_STEPS_MANUAL_COEFF, 0f).toDouble().coerceAtLeast(0.0)
+        set(v) = prefs.edit().putFloat(KEY_STEPS_MANUAL_COEFF, v.coerceAtLeast(0.0).toFloat()).apply()
+
+    /** The manual override to feed into `StepsEstimateEngine.calibrate(points, manualOverride)`:
+     *  null when 0 (auto-fit), the positive value otherwise. */
+    val stepsManualOverride: Double? get() = stepsManualCoefficient.takeIf { it > 0 }
+
     /** The auto (Tanaka) HR-max for the current age. */
     val hrMaxAuto: Int get() = Zones.hrMaxTanaka(age)
 
@@ -170,6 +205,11 @@ class ProfileStore(private val prefs: SharedPreferences) {
         private const val KEY_WAIST = "waist_cm"
         private const val KEY_HRMAX = "hr_max_override"
         private const val KEY_STEP_SCALE = "step_ticks_per_step"
+        private const val KEY_STEPS_COEFF = "steps_calibration_coefficient"
+        private const val KEY_STEPS_SAMPLE_DAYS = "steps_calibration_sample_days"
+        private const val KEY_STEPS_CONFIDENCE = "steps_calibration_confidence"
+        private const val KEY_STEPS_MANUAL_FLAG = "steps_calibration_manual"
+        private const val KEY_STEPS_MANUAL_COEFF = "steps_manual_coefficient"
 
         private const val AGE_MIN = 13
         private const val AGE_MAX = 100
@@ -240,6 +280,11 @@ fun SettingsScreen(vm: AppViewModel) {
 
     // "How your scores work" explainer sheet, reachable any time from About (macOS/iOS parity).
     var showScoringGuide by remember { mutableStateOf(false) }
+
+    // Steps-estimate calibration screen (WHOOP 4.0), reached from the Profile card's "Steps estimate"
+    // tap-through. Mirrors the macOS StepsCalibrationSheet: honest explainer + current fit + a recent
+    // estimated-vs-phone table + a manual coefficient override. Full-screen Dialog like the guide above.
+    var showStepsCalibration by remember { mutableStateOf(false) }
 
     // EXPERIMENTAL WHOOP 5/MG protocol probes (off by default). Mirrors the macOS @AppStorage toggle;
     // SharedPreferences isn't reactive, so the Switch drives a local mutableState that the store reads.
@@ -515,6 +560,49 @@ fun SettingsScreen(vm: AppViewModel) {
                 }
                 Text(
                     "Counter ticks per step — leave at 1.0 unless your steps run high. On a WHOOP 5/MG they can run very high (10× or more), so this goes up to 30. Walk a known 1,000 steps and divide NOOP's count by the real count to get your value.",
+                    style = NoopType.footnote,
+                    color = Palette.textTertiary,
+                )
+                RowDivider()
+                // Tap-through to the WHOOP 4.0 steps-ESTIMATE calibration (a SEPARATE thing from the 5/MG
+                // @57 counter divisor above): a 4.0 sends no step count, so NOOP estimates steps from
+                // motion and calibrates that to the phone. Opens the explainer + fit + comparison + manual
+                // override screen. Mirrors the macOS Profile "Steps estimate" row.
+                val stepsSummary = when {
+                    profile.stepsManualCoefficient > 0 -> "Manual"
+                    profile.stepsCalibrationCoefficient > 0 ->
+                        "Auto · ${StepsCalibrationFormat.confidenceLabel(profile.stepsCalibrationConfidence)} confidence"
+                    else -> "Not calibrated"
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 44.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showStepsCalibration = true }
+                        .semantics {
+                            contentDescription =
+                                "Steps estimate calibration. $stepsSummary. Opens the calibration screen."
+                        }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text("Steps estimate", style = NoopType.body, color = Palette.textPrimary, modifier = Modifier.weight(1f))
+                    Text(
+                        stepsSummary,
+                        style = NoopType.footnote,
+                        color = if (profile.stepsManualCoefficient > 0) Palette.accent else Palette.textTertiary,
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = Palette.textTertiary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                Text(
+                    "For a WHOOP 4.0, which sends no step count: NOOP estimates steps from motion, calibrated to your phone. Tap to see how close it is and adjust it.",
                     style = NoopType.footnote,
                     color = Palette.textTertiary,
                 )
@@ -1366,6 +1454,25 @@ fun SettingsScreen(vm: AppViewModel) {
             ) {
                 Surface(modifier = Modifier.fillMaxSize(), color = Palette.surfaceBase) {
                     ScoringGuideScreen(onClose = { showScoringGuide = false })
+                }
+            }
+        }
+
+        // Steps-estimate calibration, opened from the Profile card's "Steps estimate" row. Same
+        // full-screen Dialog idiom; a manual-coefficient write bumps `rev` so the Profile summary
+        // row reflects the new state on dismiss.
+        if (showStepsCalibration) {
+            Dialog(
+                onDismissRequest = { showStepsCalibration = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false),
+            ) {
+                Surface(modifier = Modifier.fillMaxSize(), color = Palette.surfaceBase) {
+                    StepsCalibrationScreen(
+                        vm = vm,
+                        profile = profile,
+                        onProfileChanged = { rev++ },
+                        onClose = { showStepsCalibration = false },
+                    )
                 }
             }
         }

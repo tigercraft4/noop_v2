@@ -130,6 +130,12 @@ enum MetricCatalog {
         d("strain", "Effort", "Effort", "/100", "my-whoop", "flame", 1, nil,
           "Cardiovascular load for the day, on a 0–100 scale (was 0–21)."),
         d("steps", "Steps", "Effort", "", "apple-health", "figure.walk", 0, true),
+        // On-device steps ESTIMATE for a WHOOP 4.0 (no real step count over BLE): the strap's daily
+        // motion volume scaled by a personal calibration. Stored under the computed "-noop" source, so
+        // it reads through the same exploreSeries fallback fitness_age/vitality use. Distinct from the
+        // real "steps" above — labelled "(estimated)" so it's never mistaken for a measured count.
+        d("steps_est", "Steps (estimated)", "Effort", "steps", "my-whoop", "figure.walk.motion", 0, true,
+          "Estimated from your WHOOP's motion, calibrated to your phone — not a measured step count."),
         d("hr_zones13_min", "HR Zones 1–3", "Effort", "min", "my-whoop", "heart", 0, nil),
         d("hr_zones45_min", "HR Zones 4–5", "Effort", "min", "my-whoop", "heart.fill", 0, nil),
         d("hr_zones_all_min", "HR Zones (All)", "Effort", "min", "my-whoop", "heart.text.square", 0, nil),

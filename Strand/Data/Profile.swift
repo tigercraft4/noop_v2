@@ -21,12 +21,33 @@ final class ProfileStore: ObservableObject {
         didSet { d.set(min(max(stepTicksPerStep, 0.5), 30.0), forKey: K.stepScale) }
     }
 
+    // ── Steps ESTIMATE calibration (WHOOP 4.0; StepsEstimateEngine) ─────────────────────────────
+    // Written by IntelligenceEngine each analytics pass from the auto-fit against phone steps, and
+    // read by the Settings/Steps screen to display + adjust the calibration. `stepsManualCoefficient`
+    // is the ONLY user-settable field (0 = auto-fit; > 0 = manual override fed into calibrate()); the
+    // other three are fitted outputs, surfaced read-only.
+    /// Fitted (or manually-set) steps-per-unit-of-motion coefficient last persisted by the engine.
+    @Published var stepsCalibrationCoefficient: Double { didSet { d.set(stepsCalibrationCoefficient, forKey: K.stepsCoeff) } }
+    /// How many calibration days fed the last auto-fit (0 when purely manual / not yet fit).
+    @Published var stepsCalibrationSampleDays: Int { didSet { d.set(stepsCalibrationSampleDays, forKey: K.stepsSampleDays) } }
+    /// 0–1 trust in the last fit (1.0 for a manual coefficient).
+    @Published var stepsCalibrationConfidence: Double { didSet { d.set(stepsCalibrationConfidence, forKey: K.stepsConfidence) } }
+    /// True when the persisted coefficient came from the user's manual override, not an auto-fit.
+    @Published var stepsCalibrationManual: Bool { didSet { d.set(stepsCalibrationManual, forKey: K.stepsManualFlag) } }
+    /// User-set manual coefficient. 0 = auto-fit (nil to the engine); > 0 = manual override.
+    @Published var stepsManualCoefficient: Double { didSet { d.set(max(0, stepsManualCoefficient), forKey: K.stepsManualCoeff) } }
+
     private let d = UserDefaults.standard
     private enum K {
         static let age = "profile.age", sex = "profile.sex", weight = "profile.weightKg"
         static let height = "profile.heightCm", hrMax = "profile.hrMaxOverride"
         static let stepScale = "profile.stepTicksPerStep"
         static let waist = "profile.waistCm"
+        static let stepsCoeff = "profile.stepsCalibrationCoefficient"
+        static let stepsSampleDays = "profile.stepsCalibrationSampleDays"
+        static let stepsConfidence = "profile.stepsCalibrationConfidence"
+        static let stepsManualFlag = "profile.stepsCalibrationManual"
+        static let stepsManualCoeff = "profile.stepsManualCoefficient"
     }
 
     init() {
@@ -37,7 +58,16 @@ final class ProfileStore: ObservableObject {
         waistCm = d.object(forKey: K.waist) as? Double ?? 0
         hrMaxOverride = d.object(forKey: K.hrMax) as? Int ?? 0
         stepTicksPerStep = min(max(d.object(forKey: K.stepScale) as? Double ?? 1.0, 0.5), 30.0)
+        stepsCalibrationCoefficient = d.object(forKey: K.stepsCoeff) as? Double ?? 0
+        stepsCalibrationSampleDays = d.object(forKey: K.stepsSampleDays) as? Int ?? 0
+        stepsCalibrationConfidence = d.object(forKey: K.stepsConfidence) as? Double ?? 0
+        stepsCalibrationManual = d.object(forKey: K.stepsManualFlag) as? Bool ?? false
+        stepsManualCoefficient = max(0, d.object(forKey: K.stepsManualCoeff) as? Double ?? 0)
     }
+
+    /// The manual override to feed into `StepsEstimateEngine.calibrate(_:manualOverride:)`:
+    /// nil when 0 (auto-fit), the positive value otherwise.
+    var stepsManualOverride: Double? { stepsManualCoefficient > 0 ? stepsManualCoefficient : nil }
 
     /// Tanaka estimate unless overridden.
     var hrMax: Int { hrMaxOverride > 0 ? hrMaxOverride : Int((208 - 0.7 * Double(age)).rounded()) }

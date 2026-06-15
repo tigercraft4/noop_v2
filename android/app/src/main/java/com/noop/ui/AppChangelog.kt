@@ -37,6 +37,18 @@ object AppChangelog {
     /** Newest first. */
     val releases: List<Release> = listOf(
         Release(
+            version = "4.1.0",
+            title = "Estimated steps for your WHOOP 4.0",
+            date = "June 2026",
+            items = listOf(
+                "Steps on a WHOOP 4.0 — estimated, and calibrated to you. A WHOOP 4.0 doesn't send a step count over Bluetooth, so NOOP now estimates your daily steps from the strap's own motion and calibrates that against your phone's step count (Apple Health / Health Connect) — learning a coefficient personal to your gait. It's honest about what it is: an estimate, never a pretend pedometer — shown with an \"est.\" marker, and \"—\" when there isn't enough movement to say.",
+                "A Steps calibration screen (Settings → Profile → Steps estimate): see your estimate next to your phone's real count, how confident the fit is, and a manual dial to tune it to you with a live preview. No phone steps to calibrate against? Set the dial by hand.",
+                "Where you do have a real phone step count, that always wins — the estimate only fills the days your phone didn't cover.",
+                "Generic heart-rate straps now actually connect. A Polar / Wahoo / Coospo strap you made active was being discovered but never connected to — so it sat there with no live data. Fixed. Thanks @pilleuspulcher-blip (#421).",
+                "The strap log is now safe to share — it no longer exposes your WHOOP's serial or Bluetooth MAC addresses (they're masked automatically). Thanks @maddognik (#445).",
+            ),
+        ),
+        Release(
             version = "4.0.4",
             title = "Sync visibility + a sharper Stress timeline",
             date = "June 2026",

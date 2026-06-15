@@ -153,6 +153,10 @@ private object CompareCatalog {
         // Effort (was Strain)
         CompareMetric("strain", "Effort", "Effort", "/100", "my-whoop", 1),
         CompareMetric("steps", "Steps", "Effort", "", "apple-health", 0),
+        // On-device steps ESTIMATE for a WHOOP 4.0 (no real step count over BLE): the strap's daily
+        // motion volume scaled by a personal calibration, stored under the computed "-noop" source.
+        // Distinct from the real "steps" above — labelled "(estimated)" so it never reads as measured.
+        CompareMetric("steps_est", "Steps (estimated)", "Effort", "steps", "my-whoop", 0),
         CompareMetric("active_kcal", "Active Energy", "Effort", "kcal", "apple-health", 0),
         // Health / Body
         CompareMetric("weight", "Weight", "Health", "kg", "apple-health", 1),

@@ -417,6 +417,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         // registry. A single-WHOOP install resolves to [deviceId] for every day, so the
                         // reads stay byte-identical; multi-source installs score each day from one source.
                         ownerSource = RegistryDayOwnerSource(noopApp.deviceRegistry),
+                        // Steps-estimate calibration: feed the user's manual override in (null = auto-fit),
+                        // and mirror the fitted/manual model back into ProfileStore so the Settings/Steps
+                        // screen can show + adjust it. Mirrors the macOS engine writing into ProfileStore.
+                        manualStepCoefficient = profileStore.stepsManualOverride,
+                        persistStepsCalibration = { cal ->
+                            profileStore.stepsCalibrationCoefficient = cal.coefficient
+                            profileStore.stepsCalibrationSampleDays = cal.sampleDays
+                            profileStore.stepsCalibrationConfidence = cal.confidence
+                            profileStore.stepsCalibrationManual = cal.manual
+                        },
                     )
                     // analyzeRecent now hops to Dispatchers.Default; a scope cancellation surfaces as a
                     // CancellationException that runCatching would otherwise swallow, breaking the loop's

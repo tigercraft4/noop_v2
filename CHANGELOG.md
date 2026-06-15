@@ -17,6 +17,13 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 4.1.0 — Estimated steps for your WHOOP 4.0
+
+- Steps on a WHOOP 4.0 are now ESTIMATED from the strap's motion and calibrated to your own phone step count (Apple Health / Health Connect) — an honest estimate (shown with an "est." marker, never a pretend pedometer), with a calibration screen (Settings → Profile → Steps estimate) showing estimate-vs-phone and a manual tuning dial. A real phone step count always wins; the estimate only fills uncovered days. (#276/#316/#303/#442/#409)
+- Generic heart-rate straps (Polar/Wahoo/Coospo) now actually CONNECT when made active — they were being discovered but never connected to, so they showed no live data (#421). And the strap log no longer exposes your WHOOP serial or Bluetooth MAC addresses — masked automatically so it's safe to share (#445).
+
+---
+
 ## 4.0.4 — Sync visibility & a sharper Stress timeline
 
 - Sync diagnostics: the strap log now shows the newest record your band actually holds, so a "last night didn't sync" report tells us whether the night is banked-but-not-yet-reached vs genuinely not on the strap. Thanks @idkwargwanbear (#364).
