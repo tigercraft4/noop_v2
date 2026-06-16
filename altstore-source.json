@@ -18,6 +18,15 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "4.2.4",
+          "buildVersion": "102",
+          "date": "2026-06-16",
+          "localizedDescription": "iOS: Trends report PDF export now opens the share sheet (#455).",
+          "downloadURL": "https://github.com/NoopApp/noop/releases/download/v4.2.4/NOOP-v4.2.4-ios.ipa",
+          "size": 8044852,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "4.2.3",
           "buildVersion": "101",
           "date": "2026-06-16",
@@ -550,12 +559,12 @@
           "NSHealthUpdateUsageDescription": "NOOP writes the metrics it computes from your strap back into Apple Health, on-device and only when you allow it."
         }
       },
-      "version": "4.2.3",
-      "buildVersion": "101",
+      "version": "4.2.4",
+      "buildVersion": "102",
       "versionDate": "2026-06-16",
-      "versionDescription": "Deep history backlog drains without manual strap taps (#451/#364).",
-      "downloadURL": "https://github.com/NoopApp/noop/releases/download/v4.2.3/NOOP-v4.2.3-ios.ipa",
-      "size": 8043005,
+      "versionDescription": "iOS: Trends report PDF export now opens the share sheet (#455).",
+      "downloadURL": "https://github.com/NoopApp/noop/releases/download/v4.2.4/NOOP-v4.2.4-ios.ipa",
+      "size": 8044852,
       "minOSVersion": "17.0"
     }
   ],
