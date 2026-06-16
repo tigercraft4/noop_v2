@@ -133,6 +133,7 @@ struct BackfillContinuation {
     static func shouldAutoContinue(stillConnected: Bool,
                                    strapNewestTs: Int?,
                                    ourFrontierTs: Int?,
+                                   rowsPersistedThisSession: Int = 0,
                                    lastTrimAdvanced: Bool,
                                    consecutiveCount: Int,
                                    maxAutoContinues: Int = defaultMaxAutoContinues,
@@ -140,8 +141,19 @@ struct BackfillContinuation {
         guard stillConnected else { return false }                 // 1
         guard consecutiveCount < maxAutoContinues else { return false }   // 4 (cap)
         guard lastTrimAdvanced else { return false }               // 3 (don't spin on a frozen cursor)
-        guard let newest = strapNewestTs, let frontier = ourFrontierTs else { return false }  // 2 (unknown)
-        return (newest - frontier) > behindGapSeconds              // 2 (more backlog remains)
+        // 2a: the strap reports newer data than we hold — reliable WHEN its clock epoch is sane.
+        if let newest = strapNewestTs, let frontier = ourFrontierTs, (newest - frontier) > behindGapSeconds {
+            return true
+        }
+        // 2b (#451): GET_DATA_RANGE's "newest" can read a STALE / wrong-epoch value — a strap that was
+        // fully discharged (or carries a previous owner's history) banks records across multiple clock
+        // epochs, and the data-range "newest" can latch an OLD one (e.g. 2024 when the real newest is 2026).
+        // That false "we're already past it" would stop the drain after ONE session and make the user
+        // tap the strap to re-trigger (exactly #364 / #451). But guard #3 already proved the trim advanced,
+        // so if this session also PERSISTED REAL SENSOR ROWS the strap is demonstrably still handing over
+        // real backlog — keep going. Empty / console-only ENDs persist 0 rows, so a genuinely stuck or
+        // caught-up strap still won't spin, and the consecutive cap bounds it either way.
+        return rowsPersistedThisSession > 0
     }
 }
 
@@ -1057,7 +1069,8 @@ public final class BLEManager: NSObject, ObservableObject {
         // backlog drains in back-to-back ~60s passes rather than one-per-15-min. Bounded by the
         // consecutive-cap and the spin-detector inside the pure predicate.
         if reason == "timeout" {
-            maybeAutoContinueBackfill(trimAdvanced: trimAdvanced)
+            maybeAutoContinueBackfill(trimAdvanced: trimAdvanced,
+                                      rowsPersisted: backfiller?.sessionRowsPersisted ?? 0)
         }
     }
 
@@ -1071,7 +1084,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// `trimAdvanced` is the spin-detector signal computed in exitBackfilling (did this session move the
     /// trim cursor vs the previous one) — passed in because exitBackfilling has already advanced
     /// `lastSessionEndTrim` past the comparison point by the time this Task runs.
-    private func maybeAutoContinueBackfill(trimAdvanced: Bool) {
+    private func maybeAutoContinueBackfill(trimAdvanced: Bool, rowsPersisted: Int) {
         // Cheap pre-checks first (no Task if we already know we won't continue): still connected, under
         // the cap, and the trim moved. The frontier read only happens when those already hold.
         guard state.connected, state.bonded else { return }
@@ -1083,6 +1096,7 @@ public final class BLEManager: NSObject, ObservableObject {
                 stillConnected: state.connected && state.bonded,
                 strapNewestTs: newest,
                 ourFrontierTs: frontier,
+                rowsPersistedThisSession: rowsPersisted,
                 lastTrimAdvanced: trimAdvanced,
                 consecutiveCount: count) else { return }
             // Guard against a race: a real backfill may already have re-started (periodic/connect) in the
@@ -1090,7 +1104,7 @@ public final class BLEManager: NSObject, ObservableObject {
             // log/counter churn if so.
             guard !backfilling else { return }
             consecutiveAutoContinues += 1
-            log("Backfill: auto-continuing (#364) — more backlog remains (strap ahead of our \(frontier.map(String.init) ?? "?") frontier) and the trim is advancing; re-kicking offload \(consecutiveAutoContinues)/\(BackfillContinuation.defaultMaxAutoContinues) without waiting the 15-min floor.")
+            log("Backfill: auto-continuing (#364/#451) — the trim advanced and the strap is still handing over real records (frontier \(frontier.map(String.init) ?? "?"), strap-reported newest \(newest.map(String.init) ?? "?")); re-kicking offload \(consecutiveAutoContinues)/\(BackfillContinuation.defaultMaxAutoContinues) without waiting the 15-min floor.")
             // .autoContinue bypasses the BackfillPolicy floor (the whole point — don't wait 15 min);
             // requestSync still re-checks connected/bonded/not-backfilling before kicking, and the
             // consecutive-cap above is the runaway guard.
@@ -2322,21 +2336,29 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                     continue
                 }
                 router.handle(frame: frame)                       // live/UI path
-                if frame.count > 6, frame[6] == WhoopCommand.getDataRange.rawValue,
-                   let newest = BLEManager.dataRangeNewestUnix(from: frame) {
-                    strapNewestTs = newest                        // feeds the liveness watchdog
-                    // Observability for the "last night didn't sync" reports (#364): print the NEWEST
-                    // record the strap actually holds. With the persisted-N line this lets one connect tell
-                    // a banked-but-not-yet-reached backlog (newest == last night, cursor still grinding)
-                    // apart from a genuinely un-banked night (newest is older) — no more guessing.
-                    let d = ISO8601DateFormatter()
-                    d.formatOptions = [.withFullDate, .withTime, .withColonSeparatorInTime, .withSpaceBetweenDateAndTime]
-                    log("Strap newest banked record: \(d.string(from: Date(timeIntervalSince1970: TimeInterval(newest)))) (from data range)")
-                    // Also surface the OLDEST banked record so one connect shows the full backlog SPAN — the
-                    // depth a deep oldest-first drain has to cover before recent nights land (#364).
-                    if let oldest = BLEManager.dataRangeOldestUnix(from: frame), oldest < newest {
-                        let spanDays = (newest - oldest) / 86_400
-                        log("Strap banked history span: \(d.string(from: Date(timeIntervalSince1970: TimeInterval(oldest)))) → newest (~\(spanDays) day\(spanDays == 1 ? "" : "s") of backlog, drained oldest-first)")
+                if frame.count > 6, frame[6] == WhoopCommand.getDataRange.rawValue {
+                    // #451: the decoded "newest" can latch a stale/wrong-epoch field (claypilat saw 2024 when
+                    // the real newest was 2026). To tell a genuinely-stale strap apart from a frame-alignment
+                    // bug in dataRangeNewestUnix WITHOUT guessing, dump the raw GET_DATA_RANGE response bytes
+                    // (logged unconditionally on a data-range reply, even if decode returns nil) so the field
+                    // offsets are inspectable straight from a normal strap-log export. Short frame.
+                    let hex = frame.map { String(format: "%02x", $0) }.joined()
+                    log("Get Data Range raw frame (#451 — for offset analysis): \(hex)")
+                    if let newest = BLEManager.dataRangeNewestUnix(from: frame) {
+                        strapNewestTs = newest                    // feeds the liveness watchdog
+                        // Observability for the "last night didn't sync" reports (#364): print the NEWEST
+                        // record the strap actually holds. With the persisted-N line this lets one connect tell
+                        // a banked-but-not-yet-reached backlog (newest == last night, cursor still grinding)
+                        // apart from a genuinely un-banked night (newest is older) — no more guessing.
+                        let d = ISO8601DateFormatter()
+                        d.formatOptions = [.withFullDate, .withTime, .withColonSeparatorInTime, .withSpaceBetweenDateAndTime]
+                        log("Strap newest banked record: \(d.string(from: Date(timeIntervalSince1970: TimeInterval(newest)))) (from data range)")
+                        // Also surface the OLDEST banked record so one connect shows the full backlog SPAN — the
+                        // depth a deep oldest-first drain has to cover before recent nights land (#364).
+                        if let oldest = BLEManager.dataRangeOldestUnix(from: frame), oldest < newest {
+                            let spanDays = (newest - oldest) / 86_400
+                            log("Strap banked history span: \(d.string(from: Date(timeIntervalSince1970: TimeInterval(oldest)))) → newest (~\(spanDays) day\(spanDays == 1 ? "" : "s") of backlog, drained oldest-first)")
+                        }
                     }
                 }
                 // Clock correlation runs in both live and backfill modes. Once established it

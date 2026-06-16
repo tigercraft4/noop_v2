@@ -17,6 +17,11 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 4.2.3 — Deep history backlog drains without manual strap taps (all platforms)
+
+- Fixed a sync stall where a strap that had been fully discharged (or carried a previous owner's history) would offload only one night per connection and then sit idle until you physically tapped the strap to force the next chunk. The cause: such a strap banks records across multiple clock epochs, and the "newest record" the strap reports can latch a stale value (e.g. a 2024 timestamp when your real newest is 2026) — which read as *behind* what NOOP had already saved, so the auto-continue logic wrongly concluded "caught up" and stopped. NOOP now also checks whether the just-finished pass actually handed over real sensor rows: if it did and the strap's trim cursor advanced, the backlog keeps draining in back-to-back passes regardless of a stale "newest" reading. A genuinely caught-up strap still stops (it persists zero new rows), and the per-connection cap still bounds it. Thanks @claypilat for the precise diagnosis (#451) — this also removes the "have to keep re-triggering it" half of #364.
+- Sync diagnostics now log the strap's full banked-history span (oldest → newest, with an approximate day count) so a deep multi-epoch backlog is visible at a glance in the strap log.
+
 ## 4.2.2 — Sleep stages heal themselves after a sync (all platforms)
 
 - Fixed a bug where editing a night's wake time *before* the strap finished importing that window's raw data produced a wrong stage breakdown that then stayed frozen forever. Stages now re-derive from the real data the moment it arrives — affected nights heal automatically on the next sync — while your bed/wake correction stays locked. Decoupled the user-edit lock from the (re-derivable) stage breakdown; made the stored stage JSON deterministic so the heal is a clean no-op once steady. Thanks @claypilat (#449). *(Shipped first on macOS + iOS; Android brought to parity in the same 4.2.2 — the Android stage-JSON encoder was also made deterministic, which it wasn't before.)*

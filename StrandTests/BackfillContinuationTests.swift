@@ -115,6 +115,73 @@ final class BackfillContinuationTests: XCTestCase {
             consecutiveCount: 0))
     }
 
+    /// #451: GET_DATA_RANGE latched a STALE / wrong-epoch "newest" (e.g. a 2024 value when the real newest
+    /// is 2026), which reads as BEHIND our frontier — the 2a "strap ahead" test fails and the old code
+    /// concluded "caught up" and stopped after ONE session. But the trim advanced AND this session
+    /// persisted real sensor rows, so the strap is demonstrably still handing over backlog ⇒ continue.
+    func testContinuesWhenNewestStaleButRowsFlowing() {
+        XCTAssertTrue(BackfillContinuation.shouldAutoContinue(
+            stillConnected: true,
+            strapNewestTs: 1_700_000_000,            // stale 2023/24-epoch range answer…
+            ourFrontierTs: 1_800_000_000,            // …reads as BEHIND our real 2026 frontier
+            rowsPersistedThisSession: 240,           // but real rows came in this pass
+            lastTrimAdvanced: true,
+            consecutiveCount: 0))
+    }
+
+    /// The discriminator that keeps the #451 fallback safe: a genuinely caught-up / console-only strap
+    /// persists ZERO rows, so even with the trim nudging it must NOT spin — the 0-row fallback returns false.
+    func testStopsWhenNewestStaleAndNoRows() {
+        XCTAssertFalse(BackfillContinuation.shouldAutoContinue(
+            stillConnected: true,
+            strapNewestTs: 1_700_000_000,            // stale/behind range answer
+            ourFrontierTs: 1_800_000_000,
+            rowsPersistedThisSession: 0,             // nothing actually persisted ⇒ caught up / stuck
+            lastTrimAdvanced: true,
+            consecutiveCount: 0))
+    }
+
+    /// GET_DATA_RANGE not answered at all (nil) but real rows are flowing and the trim advanced ⇒ keep
+    /// draining. Without the rows fallback this would have stalled on the unknown-range guard.
+    func testContinuesWhenRangeUnknownButRowsFlowing() {
+        XCTAssertTrue(BackfillContinuation.shouldAutoContinue(
+            stillConnected: true,
+            strapNewestTs: nil,                       // no GET_DATA_RANGE answer
+            ourFrontierTs: 1_800_000_000,
+            rowsPersistedThisSession: 180,
+            lastTrimAdvanced: true,
+            consecutiveCount: 0))
+    }
+
+    /// The rows-flowing fallback never overrides the earlier guards: a frozen trim, the cap, and a dropped
+    /// link still stop even with rows > 0 (guards 1/3/4 are checked before 2b).
+    func testRowsFallbackStillRespectsHardGuards() {
+        // Frozen trim wins over rows.
+        XCTAssertFalse(BackfillContinuation.shouldAutoContinue(
+            stillConnected: true,
+            strapNewestTs: 1_700_000_000,
+            ourFrontierTs: 1_800_000_000,
+            rowsPersistedThisSession: 240,
+            lastTrimAdvanced: false,                  // frozen cursor
+            consecutiveCount: 0))
+        // The cap wins over rows.
+        XCTAssertFalse(BackfillContinuation.shouldAutoContinue(
+            stillConnected: true,
+            strapNewestTs: 1_700_000_000,
+            ourFrontierTs: 1_800_000_000,
+            rowsPersistedThisSession: 240,
+            lastTrimAdvanced: true,
+            consecutiveCount: BackfillContinuation.defaultMaxAutoContinues))
+        // A dropped link wins over rows.
+        XCTAssertFalse(BackfillContinuation.shouldAutoContinue(
+            stillConnected: false,
+            strapNewestTs: 1_700_000_000,
+            ourFrontierTs: 1_800_000_000,
+            rowsPersistedThisSession: 240,
+            lastTrimAdvanced: true,
+            consecutiveCount: 0))
+    }
+
     /// A multi-pass drain: a deep backlog continues pass after pass (each advancing the frontier toward
     /// the strap's newest) until either we catch up OR the cap is hit — never silently stalling at one.
     func testMultiPassDrainUntilCaughtUpOrCapped() {

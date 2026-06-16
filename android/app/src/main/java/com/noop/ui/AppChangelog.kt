@@ -25,7 +25,7 @@ object AppChangelog {
      * Bump this when you add a release below. The "What's New" sheet shows automatically when the
      * stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
      */
-    const val CURRENT_VERSION = "4.0.1"
+    const val CURRENT_VERSION = "4.2.3"
 
     data class Release(
         val version: String,
@@ -36,6 +36,14 @@ object AppChangelog {
 
     /** Newest first. */
     val releases: List<Release> = listOf(
+        Release(
+            version = "4.2.3",
+            title = "Deep history backlog drains without manual taps",
+            date = "June 2026",
+            items = listOf(
+                "Fixed a sync that stalled after one night and needed a strap-tap to continue. If your strap had been fully discharged (or carried a previous owner's history), it could offload just one night per connection and then sit idle until you physically tapped it. The strap was reporting a stale \"newest record\" timestamp that read as older than data NOOP had already saved, so the catch-up logic wrongly stopped. NOOP now keeps draining as long as the strap is actually handing over real records and its trim cursor is advancing — so a deep backlog clears on its own. Thanks @claypilat (#451); this also fixes the manual-re-trigger half of #364.",
+            ),
+        ),
         Release(
             version = "4.2.2",
             title = "Sleep stages heal themselves after a sync",

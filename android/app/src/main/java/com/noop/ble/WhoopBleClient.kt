@@ -622,15 +622,25 @@ class WhoopBleClient(
             ourFrontierTs: Long?,
             lastTrimAdvanced: Boolean,
             consecutiveCount: Int,
+            rowsPersistedThisSession: Int = 0,
             maxAutoContinues: Int = MAX_AUTO_CONTINUES,
             behindGapSeconds: Long = AUTO_CONTINUE_BEHIND_GAP_SECONDS,
         ): Boolean {
             if (!stillConnected) return false                          // 1
             if (consecutiveCount >= maxAutoContinues) return false      // 4 (cap)
             if (!lastTrimAdvanced) return false                        // 3 (don't spin on a frozen cursor)
-            val newest = strapNewestTs ?: return false                 // 2 (unknown)
-            val frontier = ourFrontierTs ?: return false               // 2 (unknown)
-            return (newest - frontier) > behindGapSeconds              // 2 (more backlog remains)
+            // 2a: strap reports newer data than we hold — reliable WHEN its clock epoch is sane.
+            val newest = strapNewestTs
+            val frontier = ourFrontierTs
+            if (newest != null && frontier != null && (newest - frontier) > behindGapSeconds) return true
+            // 2b (#451): GET_DATA_RANGE's "newest" can read a STALE / wrong-epoch value — a strap that was
+            // fully discharged (or carries a previous owner's history) banks records across multiple clock
+            // epochs and can latch an OLD one (e.g. 2024 when the real newest is 2026). That false "already
+            // past it" would stop the drain after ONE session and make the user tap the strap to re-trigger
+            // (#364 / #451). But guard #3 proved the trim advanced, so if this session also PERSISTED REAL
+            // SENSOR ROWS the strap is still handing over real backlog — keep going. Empty / console-only
+            // ENDs persist 0 rows, so a stuck or caught-up strap won't spin; the cap bounds it regardless.
+            return rowsPersistedThisSession > 0
         }
     }
 
@@ -2029,6 +2039,11 @@ class WhoopBleClient(
                     // can't fall in the unix-range window. (#78 fork)
                     val cmdOff = if (connectedFamily == DeviceFamily.WHOOP5) 10 else 6
                     if (frame.size > cmdOff && (frame[cmdOff].toInt() and 0xFF) == CommandNumber.GET_DATA_RANGE.rawValue) {
+                        // #451: dump raw GET_DATA_RANGE response bytes unconditionally (even if decode returns
+                        // null) so a stale/wrong-epoch "newest" can be told apart from a frame-alignment bug in
+                        // dataRangeNewestUnix straight from a normal strap-log export. Mirrors the Swift line.
+                        val hex = frame.joinToString("") { "%02x".format(it) }
+                        log("Get Data Range raw frame (#451 — for offset analysis): $hex")
                         dataRangeNewestUnix(frame)?.let {
                             strapNewestTs = it
                             // Observability for "last night didn't sync" (#364): log the NEWEST record the
@@ -3176,7 +3191,7 @@ class WhoopBleClient(
             // A 60s idle-cap exit while still connected, with more backlog and the trim advancing,
             // immediately re-kicks instead of waiting the 900s periodic floor — so a deep oldest-first
             // backlog drains in back-to-back ~60s passes. Bounded by the cap + spin-detector.
-            maybeAutoContinueBackfill(trimAdvanced)
+            maybeAutoContinueBackfill(trimAdvanced, backfiller.sessionRowsPersisted)
         }
     }
 
@@ -3191,7 +3206,7 @@ class WhoopBleClient(
      * BackfillPolicy floor ported (only the 900s timer), so [requestSync] needs no special bypass tier —
      * it always runs when the gate passes. Mirrors Swift `maybeAutoContinueBackfill`.
      */
-    private fun maybeAutoContinueBackfill(trimAdvanced: Boolean) {
+    private fun maybeAutoContinueBackfill(trimAdvanced: Boolean, rowsPersisted: Int) {
         val s = _state.value
         if (!s.connected || !s.bonded) return
         val newest = strapNewestTs
@@ -3204,6 +3219,7 @@ class WhoopBleClient(
                     ourFrontierTs = frontier,
                     lastTrimAdvanced = trimAdvanced,
                     consecutiveCount = count,
+                    rowsPersistedThisSession = rowsPersisted,
                 )
             ) {
                 return@launch
@@ -3214,9 +3230,10 @@ class WhoopBleClient(
                 if (backfilling) return@post
                 consecutiveAutoContinues += 1
                 log(
-                    "Backfill: auto-continuing (#364) — more backlog remains (strap ahead of our " +
-                        "${frontier ?: "?"} frontier) and the trim is advancing; re-kicking offload " +
-                        "$consecutiveAutoContinues/$MAX_AUTO_CONTINUES without waiting the 15-min floor.",
+                    "Backfill: auto-continuing (#364/#451) — the trim advanced and the strap is still " +
+                        "handing over real records (frontier ${frontier ?: "?"}, strap-reported newest " +
+                        "${newest ?: "?"}); re-kicking offload $consecutiveAutoContinues/$MAX_AUTO_CONTINUES " +
+                        "without waiting the 15-min floor.",
                 )
                 requestSync()
             }

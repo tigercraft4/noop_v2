@@ -144,6 +144,90 @@ class BackfillContinuationTest {
         )
     }
 
+    /** #451: GET_DATA_RANGE latched a STALE / wrong-epoch "newest" (e.g. 2024 when the real newest is
+     *  2026), which reads as BEHIND our frontier — the old "strap ahead" test fails and we'd stop after one
+     *  session. But the trim advanced AND this pass persisted real sensor rows ⇒ keep draining. */
+    @Test
+    fun continues_whenNewestStaleButRowsFlowing() {
+        assertTrue(
+            WhoopBleClient.shouldAutoContinue(
+                stillConnected = true,
+                strapNewestTs = 1_700_000_000L,             // stale range answer…
+                ourFrontierTs = 1_800_000_000L,             // …reads as behind our real frontier
+                lastTrimAdvanced = true,
+                consecutiveCount = 0,
+                rowsPersistedThisSession = 240,
+            ),
+        )
+    }
+
+    /** The discriminator that keeps the #451 fallback safe: a caught-up / console-only strap persists ZERO
+     *  rows, so even with the trim nudging it must NOT spin. */
+    @Test
+    fun stops_whenNewestStaleAndNoRows() {
+        assertFalse(
+            WhoopBleClient.shouldAutoContinue(
+                stillConnected = true,
+                strapNewestTs = 1_700_000_000L,
+                ourFrontierTs = 1_800_000_000L,
+                lastTrimAdvanced = true,
+                consecutiveCount = 0,
+                rowsPersistedThisSession = 0,
+            ),
+        )
+    }
+
+    /** GET_DATA_RANGE unanswered (null) but real rows flowing and the trim advanced ⇒ keep draining. */
+    @Test
+    fun continues_whenRangeUnknownButRowsFlowing() {
+        assertTrue(
+            WhoopBleClient.shouldAutoContinue(
+                stillConnected = true,
+                strapNewestTs = null,
+                ourFrontierTs = 1_800_000_000L,
+                lastTrimAdvanced = true,
+                consecutiveCount = 0,
+                rowsPersistedThisSession = 180,
+            ),
+        )
+    }
+
+    /** The rows-flowing fallback never overrides the earlier guards: frozen trim, cap, and dropped link
+     *  still stop even with rows > 0. */
+    @Test
+    fun rowsFallback_stillRespectsHardGuards() {
+        assertFalse(
+            WhoopBleClient.shouldAutoContinue(
+                stillConnected = true,
+                strapNewestTs = 1_700_000_000L,
+                ourFrontierTs = 1_800_000_000L,
+                lastTrimAdvanced = false,                   // frozen cursor wins
+                consecutiveCount = 0,
+                rowsPersistedThisSession = 240,
+            ),
+        )
+        assertFalse(
+            WhoopBleClient.shouldAutoContinue(
+                stillConnected = true,
+                strapNewestTs = 1_700_000_000L,
+                ourFrontierTs = 1_800_000_000L,
+                lastTrimAdvanced = true,
+                consecutiveCount = WhoopBleClient.MAX_AUTO_CONTINUES,   // cap wins
+                rowsPersistedThisSession = 240,
+            ),
+        )
+        assertFalse(
+            WhoopBleClient.shouldAutoContinue(
+                stillConnected = false,                     // dropped link wins
+                strapNewestTs = 1_700_000_000L,
+                ourFrontierTs = 1_800_000_000L,
+                lastTrimAdvanced = true,
+                consecutiveCount = 0,
+                rowsPersistedThisSession = 240,
+            ),
+        )
+    }
+
     /** A deep backlog drains pass-after-pass until caught up OR the cap is hit — never stalling at one. */
     @Test
     fun multiPassDrain_untilCaughtUpOrCapped() {
