@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "4.5.1"
+    static let currentVersion = "4.5.2"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,13 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "4.5.2",
+            title: "Honest labelling for WHOOP 5/MG deep-data diagnostics",
+            date: "June 2026",
+            items: [
+                "Corrected the experimental WHOOP 5/MG \"deep data\" diagnostics wording. It used to announce *\"Deep data is flowing — please share your strap log!\"* when it saw certain frames — but we've since confirmed those frames are just **historical-sync data** (often another app pulling the strap's backlog over Bluetooth), **not** a separate live stream that the enable sequence unlocks. The counter and logs now say exactly that, so nobody's sent chasing a live unlock that isn't there. Purely a wording change — no behaviour difference. *(Thanks to community contributor j0b-dev — #494.)*",
+            ]),
         Release(
             version: "4.5.1",
             title: "Sleep: keep real nights when the strap comes off",

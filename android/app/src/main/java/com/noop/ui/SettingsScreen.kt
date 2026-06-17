@@ -1080,13 +1080,13 @@ fun SettingsScreen(vm: AppViewModel) {
                     }
                     if (live.deepPacketsThisSession > 0) {
                         Text(
-                            "🎯 Deep data is flowing — ${live.deepPacketsThisSession} R22 packet(s) this session. Please share your strap log!",
+                            "${live.deepPacketsThisSession} type-0x2F historical-offload frame(s) seen outside our sync — these are history (e.g. another app pulling the strap's backlog), not a live R22 stream (#494).",
                             style = NoopType.caption,
-                            color = Palette.statusPositive,
+                            color = Palette.textSecondary,
                         )
                     } else if (live.r22FlagsAccepted >= 15) {
                         Text(
-                            "Flags accepted, but no deep packets yet — keep the strap on for a couple of minutes, then share your strap log on #174.",
+                            "Flags accepted, but the enable sequence doesn't start a separate live stream — the deep records arrive as part of the normal history sync (#494).",
                             style = NoopType.caption,
                             color = Palette.textTertiary,
                         )

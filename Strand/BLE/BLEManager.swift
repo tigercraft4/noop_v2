@@ -1252,16 +1252,19 @@ public final class BLEManager: NSObject, ObservableObject {
     /// EXPERIMENTAL R22 telemetry (#174): give the user (and us) live proof of what the strap is doing.
     /// (1) Every `COMMAND_RESPONSE` (type 0x24) to a `SET_CONFIG` (0x78) is the strap ACKing one
     ///     `enable_r22_*` flag — hardware-confirmed in sebastianwoo's capture. 15 ACKs = full acceptance.
-    /// (2) A type-0x2F record arriving OUTSIDE a history offload is the R22 deep biometric stream
-    ///     actually flowing in realtime — the prize. (During an offload, type-0x2F is just banked
-    ///     history, already handled by the Backfiller, so we only count the live ones.)
+    /// (2) A type-0x2F record arriving OUTSIDE our own history offload is NOT a separate live stream.
+    ///     #494 showed these are historical-offload data: they appear when a SECOND BLE client pulls
+    ///     the strap's history (`SendHistoricalData`) — the burst scales with the disconnect/backlog
+    ///     time, not wall-clock — and the SET_CONFIG `enable_r22_*` sequence (accepted 15/15) starts no
+    ///     separate stream. type-0x2F is only ever the historical offload (confirmed across #344's v20/v21
+    ///     captures too). We still surface these as a diagnostic, but as what they are — another client's
+    ///     backlog reaching us over the shared notify channel — not a live R22 "unlock".
     /// Frame layout (5/MG puffin envelope): packet_type @ byte 8, the responded-to cmd @ byte 10.
     ///
-    /// #174 cooldown: when an offload ENDS, the strap can keep flushing a few trailing type-0x2F
-    /// records AFTER `backfilling` has already flipped false. Those are tail-end HISTORY, not live —
-    /// counting them as "live deep packets" was a false positive. So we stamp `lastOffloadFrameAt` on
-    /// every offload frame (and at HISTORY_COMPLETE) and refuse to count a non-offload 0x2F as live
-    /// within `deepPacketLiveCooldownSeconds` of it. The flag-ACK counting (1) is unchanged.
+    /// #174 cooldown: when our own offload ENDS, the strap can keep flushing a few trailing type-0x2F
+    /// records AFTER `backfilling` has already flipped false. So we stamp `lastOffloadFrameAt` on every
+    /// offload frame (and at HISTORY_COMPLETE) and skip a non-offload 0x2F within
+    /// `deepPacketLiveCooldownSeconds` of it. The flag-ACK counting (1) is unchanged.
     private func noteWhoop5R22Telemetry(_ frame: [UInt8], duringOffload: Bool) {
         // R22 deep-data is a WHOOP 5/MG concept only. On a WHOOP 4 a type-0x2F frame is something else
         // entirely, so counting it as a "deep packet" gave 4.0 owners a bogus deep-data counter (#346).
@@ -1282,17 +1285,20 @@ public final class BLEManager: NSObject, ObservableObject {
                 lastOffloadFrameAt = Date()
                 return
             }
-            // Cooldown guard: a 0x2F within deepPacketLiveCooldownSeconds of the last offload
-            // frame/HISTORY_COMPLETE is a trailing historical record, not the live R22 stream.
+            // Cooldown guard: a 0x2F within deepPacketLiveCooldownSeconds of our own last offload
+            // frame/HISTORY_COMPLETE is a trailing historical record from that session.
             if let last = lastOffloadFrameAt,
                Date().timeIntervalSince(last) < BLEManager.deepPacketLiveCooldownSeconds {
                 return
             }
+            // A 0x2F outside our offload is historical-offload data, not a live R22 stream (#494) —
+            // typically another BLE client pulling the strap's backlog over the shared notify channel.
+            // Surface it as a diagnostic, but don't claim a live-stream "unlock".
             state.deepPacketsThisSession += 1
             if state.deepPacketsThisSession == 1 {
-                log("Deep-data: 🎯 FIRST live deep (R22, type-0x2F) packet received — this is it. Please keep wearing it and share your strap log on #174.")
+                log("Deep-data: type-0x2F received outside our offload — this is historical-offload data (another BLE client pulling the strap's history, or a trailing flush), not a live R22 stream (#494).")
             } else if state.deepPacketsThisSession.isMultiple(of: 50) {
-                log("Deep-data: \(state.deepPacketsThisSession) live deep (type-0x2F) packets this session.")
+                log("Deep-data: \(state.deepPacketsThisSession) type-0x2F historical-offload frames seen outside our session.")
             }
         }
     }

@@ -142,9 +142,10 @@ data class LiveState(
      *  returns a COMMAND_RESPONSE per flag — hardware-confirmed). Reset per attempt + per session.
      *  Twin of macOS LiveState.r22FlagsAccepted. */
     val r22FlagsAccepted: Int = 0,
-    /** Count of LIVE type-0x2F deep biometric records seen this session OUTSIDE a history offload — i.e.
-     *  the R22 deep stream actually flowing in realtime. 0 with flags accepted = enable taken but no deep
-     *  data yet. Twin of macOS LiveState.deepPacketsThisSession. (#174) */
+    /** Count of type-0x2F records seen this session OUTSIDE our own history offload. #494 showed these are
+     *  historical-offload data (e.g. another BLE client pulling the strap's backlog over the shared notify
+     *  channel), NOT a separate live R22 stream — type-0x2F is only ever the historical offload. Kept as a
+     *  diagnostic counter, not a "deep stream unlocked" signal. Twin of macOS LiveState.deepPacketsThisSession. (#174) */
     val deepPacketsThisSession: Int = 0,
 ) {
     /** Set the fresh-packet [rr] AND append the valid intervals onto the bounded [rrRecent] rolling
@@ -2100,13 +2101,18 @@ class WhoopBleClient(
     /**
      * EXPERIMENTAL R22 telemetry (#174) — port of macOS BLEManager.noteWhoop5R22Telemetry.
      * (1) A COMMAND_RESPONSE (type 0x24) to a SET_CONFIG (0x78) = the strap ACKing one enable_r22 flag.
-     * (2) A type-0x2F record OUTSIDE a history offload = the R22 deep biometric stream flowing live.
+     * (2) A type-0x2F record OUTSIDE our own history offload is NOT a separate live stream. #494 showed
+     *     these are historical-offload data: they appear when a SECOND BLE client pulls the strap's
+     *     history (SendHistoricalData) — the burst scales with the disconnect/backlog time, not
+     *     wall-clock — and the SET_CONFIG enable_r22_* sequence (accepted 15/15) starts no separate
+     *     stream. type-0x2F is only ever the historical offload (confirmed across #344's v20/v21 captures
+     *     too). We still surface these as a diagnostic, but as what they are — another client's backlog
+     *     reaching us over the shared notify channel — not a live R22 "unlock".
      * 5/MG puffin layout: packet_type @ byte 8, the responded-to cmd @ byte 10.
      *
-     * #174 cooldown: when an offload ENDS, the strap can keep flushing a few trailing type-0x2F records
-     * AFTER `backfilling` has already flipped false. Those are tail-end HISTORY, not live — counting
-     * them as "live deep packets" was a false positive. So we stamp [lastOffloadFrameAtMs] on every
-     * offload frame (and at HISTORY_COMPLETE) and refuse to count a non-offload 0x2F as live within
+     * #174 cooldown: when our own offload ENDS, the strap can keep flushing a few trailing type-0x2F
+     * records AFTER `backfilling` has already flipped false. So we stamp [lastOffloadFrameAtMs] on every
+     * offload frame (and at HISTORY_COMPLETE) and skip a non-offload 0x2F within
      * [DEEP_PACKET_LIVE_COOLDOWN_MS] of it. The flag-ACK counting (1) is unchanged.
      */
     private fun noteWhoop5R22Telemetry(frame: ByteArray, duringOffload: Boolean) {
@@ -2128,17 +2134,20 @@ class WhoopBleClient(
                 lastOffloadFrameAtMs = System.currentTimeMillis()
                 return
             }
-            // Cooldown guard: a 0x2F within DEEP_PACKET_LIVE_COOLDOWN_MS of the last offload
-            // frame/HISTORY_COMPLETE is a trailing historical record, not the live R22 stream.
+            // Cooldown guard: a 0x2F within DEEP_PACKET_LIVE_COOLDOWN_MS of our own last offload
+            // frame/HISTORY_COMPLETE is a trailing historical record from that session.
             if (lastOffloadFrameAtMs != 0L &&
                 System.currentTimeMillis() - lastOffloadFrameAtMs < DEEP_PACKET_LIVE_COOLDOWN_MS
             ) {
                 return
             }
+            // A 0x2F outside our offload is historical-offload data, not a live R22 stream (#494) —
+            // typically another BLE client pulling the strap's backlog over the shared notify channel.
+            // Surface it as a diagnostic, but don't claim a live-stream "unlock".
             val n = _state.value.deepPacketsThisSession + 1
             _state.value = _state.value.copy(deepPacketsThisSession = n)
-            if (n == 1) log("Deep-data: 🎯 FIRST live deep (R22, type-0x2F) packet received — please keep wearing it and share your strap log on #174.")
-            else if (n % 50 == 0) log("Deep-data: $n live deep (type-0x2F) packets this session.")
+            if (n == 1) log("Deep-data: type-0x2F received outside our offload — this is historical-offload data (another BLE client pulling the strap's history, or a trailing flush), not a live R22 stream (#494).")
+            else if (n % 50 == 0) log("Deep-data: $n type-0x2F historical-offload frames seen outside our session.")
         }
     }
 
