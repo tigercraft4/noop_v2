@@ -66,14 +66,14 @@ data class PpgHrSample(
     val synced: Int = 0,
 )
 
-/** One downsampled HR point — the bucket's start (unix seconds) + the mean bpm over it. Query
+/** One downsampled HR point, the bucket's start (unix seconds) + the mean bpm over it. Query
  *  result of [WhoopDao.hrBuckets], not a table. Mirrors the macOS `HRBucket`. */
 data class HrBucket(
     val bucket: Long,
     val avgBpm: Double,
 )
 
-/** Aggregate HR over a time window — sample count + avg/max bpm. Query result of
+/** Aggregate HR over a time window, sample count + avg/max bpm. Query result of
  *  [WhoopDao.hrWindowStats], not a table. Used to derive a workout's HR from strap samples when
  *  the imported session carries none (#77). avg/max are null when n == 0. */
 data class HrWindowStats(
@@ -82,7 +82,7 @@ data class HrWindowStats(
     val max: Int?,
 )
 
-/** R-R interval. Swift `rrInterval` (v1). PK (deviceId, ts, rrMs) — multiple R-R per ts. */
+/** R-R interval. Swift `rrInterval` (v1). PK (deviceId, ts, rrMs), multiple R-R per ts. */
 @Entity(tableName = "rrInterval", primaryKeys = ["deviceId", "ts", "rrMs"])
 data class RrInterval(
     val deviceId: String,
@@ -142,7 +142,7 @@ data class SkinTempSample(
 /**
  * Step / motion counter sample (WHOOP5 type-47 step_motion_counter@57). PK (deviceId, ts).
  * `counter` is the device's CUMULATIVE u16 running step counter (0..65535, wraps). It is NOT a
- * per-sample delta — the daily step total is derived in AnalyticsEngine by summing positive
+ * per-sample delta, the daily step total is derived in AnalyticsEngine by summing positive
  * consecutive deltas (with u16 wraparound handling). Mirrors SkinTempSample exactly (IGNORE-dedupe
  * by natural key). APPROXIMATE: @57's step semantics are an on-device estimate, unverified against
  * the official WHOOP app (see HistoricalStreams.decodeWhoop5Historical comments). (#78)
@@ -152,6 +152,13 @@ data class StepSample(
     val deviceId: String,
     val ts: Long,
     val counter: Int,
+    // The per-record activity-class enum decoded from @63 (community finding #316): 0=still, 1=walk, 2=run;
+    // null when the byte was 0xFF/invalid or absent. The decoder ALREADY carries this on [StepRow], but it
+    // was DROPPED at the insert boundary (the v2_3 stepSample held only ts/counter), so it could never be
+    // persisted or read. Added by MIGRATION_12_13 (Swift WhoopStore v19 parity). Nullable INTEGER (no SQL
+    // DEFAULT, a Kotlin construction default never reaches the schema), so old rows read back null: an
+    // absent class stays absent, never a fabricated 0/"still".
+    val activityClass: Int? = null,
     val synced: Int = 0,
 )
 
@@ -202,11 +209,11 @@ data class DailyMetric(
     val skinTempDevC: Double? = null,   // skin-temperature deviation (°C) from baseline
     val respRateBpm: Double? = null,    // mean respiration rate (breaths/min) during sleep
     // On-device derived daily step total from the WHOOP5 step_motion_counter@57 (sum of positive
-    // consecutive u16-counter deltas over the day). APPROXIMATE — not cloud/clinical parity. (#78)
+    // consecutive u16-counter deltas over the day). APPROXIMATE, not cloud/clinical parity. (#78)
     val steps: Int? = null,
     // On-device APPROXIMATE whole-day active+resting energy estimate (kcal), computed from HR alone
     // by AnalyticsEngine (Keytel active + Harris–Benedict BMR). Null when the day has no scored HR
-    // window. NOT cloud/clinical parity — a heart-rate estimate. (#78)
+    // window. NOT cloud/clinical parity, a heart-rate estimate. (#78)
     val activeKcalEst: Double? = null,
 )
 
@@ -222,7 +229,7 @@ data class DailyMetric(
  *     INTEGER), so every existing row reads as un-edited.
  *   - [startTsAdjusted] (v14, MIGRATION_6_7): the hand-set bed (onset) time. [startTs] stays the
  *     IMMUTABLE detected primary key (so the recompute guard + daily override keep matching on it,
- *     and the upsert REPLACEs the row in place rather than spawning a duplicate at a moved key — the
+ *     and the upsert REPLACEs the row in place rather than spawning a duplicate at a moved key, the
  *     latent Android bug this fix removes). Nullable INTEGER; null means "onset not edited, use
  *     startTs". Display / sort / re-staging use [effectiveStartTs]. Mirrors the GRDB v14 migration.
  */
@@ -243,9 +250,9 @@ data class SleepSession(
     // compute then discard, banked beside [stagesJSON] on the same row:
     //   - [motionJSON]: a compact JSON array of per-epoch motion magnitudes (the SleepStager's per-epoch
     //     restlessness signal), one entry per stage epoch on the SAME 30 s grid as stagesJSON (H8).
-    //   - [sleepStateJSON]: a compact JSON array of the decoded v18 band sleep_state per epoch — the
+    //   - [sleepStateJSON]: a compact JSON array of the decoded v18 band sleep_state per epoch, the
     //     Interpreter's `(sb shr 4) and 3` (H2 persist half).
-    // Both nullable TEXT (no SQL DEFAULT — a Kotlin construction default never reaches the schema), so old
+    // Both nullable TEXT (no SQL DEFAULT, a Kotlin construction default never reaches the schema), so old
     // rows read back null. HONESTY: an absent signal stays null, never a fabricated zero series. Written/read
     // through the targeted DAO methods (not the @Upsert path, which never names them and so preserves them).
     val motionJSON: String? = null,
@@ -259,9 +266,9 @@ data class SleepSession(
     val durationHours: Double get() = (endTs - effectiveStartTs) / 3600.0
 
     /**
-     * DERIVED nap classification (#518) — computed at READ time, NO schema column / migration. A block
+     * DERIVED nap classification (#518), computed at READ time, NO schema column / migration. A block
      * is a nap when it is SHORT (< [NAP_MAX_HOURS]) or DAYTIME-onset (onset not in the overnight window).
-     * The day's MAIN sleep is resolved separately (the longest, overnight-preferring block — see
+     * The day's MAIN sleep is resolved separately (the longest, overnight-preferring block, see
      * SleepScreen.mainSleepBlock); this flag only describes the block's own shape, so the UI can label /
      * count naps consistently with iOS SleepView.isNap. A long overnight split-sleep block is NOT a nap.
      */
@@ -299,7 +306,7 @@ data class MetricSeriesRow(
 /**
  * Lab Book marker reading (Health Records pillar). Swift `labMarker` (Database.swift v17 /
  * LabMarkerStore.swift). The richer source-of-truth behind the daily `metricSeries` projection:
- * one row per dated reading the USER entered themselves — a day can hold several readings, each
+ * one row per dated reading the USER entered themselves, a day can hold several readings, each
  * carries a precise `takenAt` instant and `unit`, and notes / qualitative (`valueText`) results
  * don't fit a REAL-only `metricSeries` cell.
  *
@@ -338,7 +345,7 @@ data class LabMarkerRow(
 )
 
 /**
- * Cached journal answer (logged behaviour). Swift `journal` (v8 — JournalWorkoutAppleCache.swift).
+ * Cached journal answer (logged behaviour). Swift `journal` (v8, JournalWorkoutAppleCache.swift).
  * Natural key (deviceId, day, question) where day is "YYYY-MM-DD". `answeredYes` is stored as an
  * INTEGER 0/1 in SQLite; exposed as Boolean here (Room maps Boolean -> INTEGER), matching the
  * Swift `answeredYes ? 1 : 0` write and `(... as Int) != 0` read.
@@ -353,7 +360,7 @@ data class JournalEntry(
 )
 
 /**
- * Cached workout (Whoop + Apple Health). Swift `workout` (v8 — JournalWorkoutAppleCache.swift).
+ * Cached workout (Whoop + Apple Health). Swift `workout` (v8, JournalWorkoutAppleCache.swift).
  * Natural key (deviceId, startTs, sport). All metric columns nullable. `source` distinguishes
  * origin ("my-whoop" / "apple-health"); `zonesJSON` is verbatim HR-zone-percentages JSON.
  * `startTs`/`endTs` are wall-clock unix SECONDS (Swift Int -> Kotlin Long).
@@ -381,10 +388,10 @@ data class WorkoutRow(
  * re-derives sport="detected" rows under "<deviceId>-noop" every run, so a plain delete only hides a
  * bout until the next re-detect recreates it. This table is INDEPENDENT of that churn: a detected row
  * is filtered out at read time whenever it OVERLAPS a marker's [startTs, endTs] span, so dismissal is
- * permanent — and span-overlap (not an exact-key match) survives the small startTs DRIFT a bout's
+ * permanent, and span-overlap (not an exact-key match) survives the small startTs DRIFT a bout's
  * boundary can take as more HR arrives, matching the macOS dismissed-span semantics exactly.
  *
- * PK (deviceId, startTs) — one marker per detected start; `endTs` is the span end. Android-only table
+ * PK (deviceId, startTs), one marker per detected start; `endTs` is the span end. Android-only table
  * (no GRDB twin): the macOS read model can't add a column to its shared workout struct, so macOS
  * persists the equivalent as a UserDefaults "startTs:endTs" span list. Added by MIGRATION_4_5.
  */
@@ -397,7 +404,7 @@ data class DismissedWorkout(
 
 /**
  * Durable tombstone for a user-DELETED sleep session (#33): keeps a deleted computed night from being
- * re-derived by the recompute, mirroring [DismissedWorkout] (#107). PK (deviceId, startTs) — keyed on
+ * re-derived by the recompute, mirroring [DismissedWorkout] (#107). PK (deviceId, startTs), keyed on
  * the deleted session's start; `endTs` is the span the recompute's overlap test uses (a re-detected
  * onset can drift second-to-second). Android-only (iOS has no sleep-delete path). Added by MIGRATION_9_10.
  */
@@ -409,7 +416,7 @@ data class DismissedSleep(
 )
 
 /**
- * Cached Apple-Health daily aggregate. Swift `appleDaily` (v8 — JournalWorkoutAppleCache.swift).
+ * Cached Apple-Health daily aggregate. Swift `appleDaily` (v8, JournalWorkoutAppleCache.swift).
  * Natural key (deviceId, day) where day is "YYYY-MM-DD". All metric columns nullable.
  */
 @Entity(tableName = "appleDaily", primaryKeys = ["deviceId", "day"])

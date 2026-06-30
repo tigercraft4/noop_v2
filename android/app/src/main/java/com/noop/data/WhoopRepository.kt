@@ -170,8 +170,11 @@ class WhoopRepository(private val dao: WhoopDao) {
             dao.insertSpo2(streams.spo2.map { Spo2Sample(deviceId, it.ts, it.red, it.ir) })
         val skinIds = if (streams.skinTemp.isEmpty()) emptyList() else
             dao.insertSkinTemp(streams.skinTemp.map { SkinTempSample(deviceId, it.ts, it.raw) })
+        // activityClass (#316, v13 column) is the @63 activity-class enum (0=still/1=walk/2=run) the decoder
+        // already carries on each StepRow; it was dropped here before v13 (the insert listed only ts/counter).
+        // it.activityClass is null when the @63 byte was 0xFF/invalid/absent → stored as SQL NULL.
         val stepIds = if (streams.steps.isEmpty()) emptyList() else
-            dao.insertSteps(streams.steps.map { StepSample(deviceId, it.ts, it.counter) })
+            dao.insertSteps(streams.steps.map { StepSample(deviceId, it.ts, it.counter, it.activityClass) })
         val respIds = if (streams.resp.isEmpty()) emptyList() else
             dao.insertResp(streams.resp.map { RespSample(deviceId, it.ts, it.raw) })
         val gravIds = if (streams.gravity.isEmpty()) emptyList() else

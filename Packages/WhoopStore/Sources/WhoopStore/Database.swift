@@ -153,7 +153,7 @@ extension WhoopStore {
         }
         migrator.registerMigration("v8") { db in
             // Journal, workouts, and Apple-Health daily aggregates.
-            // journal: one row per (deviceId, day, question) — user-answered daily prompts.
+            // journal: one row per (deviceId, day, question), user-answered daily prompts.
             try db.create(table: "journal") { t in
                 t.column("deviceId", .text).notNull()
                 t.column("day", .text).notNull()
@@ -216,7 +216,7 @@ extension WhoopStore {
         }
 
         // v10 (#78): WHOOP5 step_motion_counter persistence (macOS parity with Android's MIGRATION_2_3).
-        // Additive only — the strap trims acked history and won't re-send it, so a destructive rebuild
+        // Additive only, the strap trims acked history and won't re-send it, so a destructive rebuild
         // would lose it; this preserves every existing row. No `synced` column (unused; see StreamStore).
         migrator.registerMigration("v10") { db in
             try db.create(table: "stepSample") { t in
@@ -238,7 +238,7 @@ extension WhoopStore {
         }
 
         // v12 (#156): PPG-derived per-second HR from the WHOOP 5.0 v26 optical buffer. Stored in its OWN
-        // table (not hrSample) so the measured `hr` is never conflated with the derived estimate — reads
+        // table (not hrSample) so the measured `hr` is never conflated with the derived estimate, reads
         // COALESCE hrSample first, ppgHrSample only where hrSample has no row. Additive only; bpm/conf
         // are REAL (bpm is a float estimate, conf is the 0–1 autocorrelation peak).
         migrator.registerMigration("v12") { db in
@@ -264,7 +264,7 @@ extension WhoopStore {
 
         // v14 (#318): user-corrected sleep ONSET. `startTs` stays the immutable detected key (so the
         // recompute guard and daily override keep matching on it); the hand-set bedtime lives here.
-        // Nullable — null means "onset not edited, use startTs". Additive, so existing rows/readers are
+        // Nullable, null means "onset not edited, use startTs". Additive, so existing rows/readers are
         // unaffected.
         migrator.registerMigration("v14") { db in
             try db.alter(table: "sleepSession") { t in
@@ -273,7 +273,7 @@ extension WhoopStore {
         }
 
         // v15: the device registry. `deviceId` already keys every sample table (deviceId, ts), so it IS
-        // the per-device discriminator — this just gives each device a row with brand/model/capabilities,
+        // the per-device discriminator, this just gives each device a row with brand/model/capabilities,
         // a single-active invariant (enforced in DeviceRegistryStore), and a dayOwnership override table so
         // one source owns a day's scores (never blended). Additive: the existing WHOOP is seeded with its
         // unchanged id "my-whoop" (zero sample-row migration). INSERT OR IGNORE so re-runs/restores are safe.
@@ -311,11 +311,11 @@ extension WhoopStore {
             try db.execute(sql: "ALTER TABLE pairedDevice ADD COLUMN peripheralId TEXT")
         }
 
-        // v17 (Lab Book): the Health Records "marker" store — one row per dated reading the USER
+        // v17 (Lab Book): the Health Records "marker" store, one row per dated reading the USER
         // entered themselves (spec 2026-06-19-v5-health-records-design.md §"New"). This is the richer
         // source-of-truth behind the daily `metricSeries` projection: a single day can hold several
         // readings, each carries a precise `takenAt` instant and `unit`, and notes / qualitative
-        // (`valueText`) results don't fit a REAL-only `metricSeries` cell. Additive only — a NEW table,
+        // (`valueText`) results don't fit a REAL-only `metricSeries` cell. Additive only, a NEW table,
         // no existing row touched, so an old reader is unaffected.
         //
         // NON-CLINICAL: holds ONLY user-entered values + an OPTIONAL user-entered `referenceText`
@@ -356,23 +356,36 @@ extension WhoopStore {
         }
 
         // v18 (H8 + H2-persist): per-SLEEP-SESSION analytics the stager/interpreter already compute then
-        // discard — banked alongside the existing `stagesJSON` on the same row (deviceId, startTs).
-        //   • `motionJSON`     — a compact JSON array of per-epoch motion magnitudes (the SleepStager's
+        // discard, banked alongside the existing `stagesJSON` on the same row (deviceId, startTs).
+        //   • `motionJSON`, a compact JSON array of per-epoch motion magnitudes (the SleepStager's
         //                        per-epoch restlessness signal), one entry per stage epoch, SAME 30 s grid
         //                        as `stagesJSON`. Persisting it lets restlessness/wake-fragmentation read a
         //                        real per-epoch series instead of recomputing the whole stager.
-        //   • `sleepStateJSON` — a compact JSON array of the decoded v18 band state per epoch (the
+        //   • `sleepStateJSON`, a compact JSON array of the decoded v18 band state per epoch (the
         //                        Interpreter's `(sb>>4)&3`), so the strap's own banked sleep/wake band is
         //                        durable rather than dropped after decode (H2 persist half).
         // Both nullable TEXT: every existing row reads back null (no per-epoch series yet), old readers that
-        // don't SELECT them keep working, and a session with no raw/banked epoch data simply stores null —
-        // an ABSENT signal stays absent, never a fabricated zero series. Additive ALTERs only (no data
+        // don't SELECT them keep working, and a session with no raw/banked epoch data simply stores null,         // an ABSENT signal stays absent, never a fabricated zero series. Additive ALTERs only (no data
         // touched), so already-offloaded raw streams survive (the strap trims acked history and won't
         // re-send it). Twin of Android's MIGRATION_11_12.
         migrator.registerMigration("v18-sleep-motion-state") { db in
             try db.alter(table: "sleepSession") { t in
                 t.add(column: "motionJSON", .text)
                 t.add(column: "sleepStateJSON", .text)
+            }
+        }
+
+        // v19 (#316 / @63 activity class): the per-record activity-class enum the decoder ALREADY reads off
+        // @63 (0=still, 1=walk, 2=run; 0xFF/invalid stores nothing) but which was DROPPED at the storage
+        // boundary, `StepSample` carried `activityClass` yet the v10 stepSample INSERT only listed
+        // (deviceId, ts, counter), so it could never be persisted, read, or shown. This ALTER adds a NULLABLE
+        // `activityClass INTEGER` to stepSample: additive only, no DEFAULT (a null means "no class for this
+        // record", an absent signal stays absent, never a fabricated 0/"still"), so every existing row reads
+        // back null and an old reader that doesn't SELECT it keeps working. Already-offloaded raw streams
+        // survive (the strap trims acked history and won't re-send it). Twin of Android's MIGRATION_12_13.
+        migrator.registerMigration("v19-step-activity-class") { db in
+            try db.alter(table: "stepSample") { t in
+                t.add(column: "activityClass", .integer)
             }
         }
         return migrator

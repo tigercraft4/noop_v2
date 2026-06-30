@@ -4,7 +4,7 @@ import WhoopProtocol
 
 extension WhoopStore {
     /// Deterministic JSON for an event payload (sorted keys so the same payload always
-    /// serializes byte-identically — important for the natural-key dedupe and parity).
+    /// serializes byte-identically, important for the natural-key dedupe and parity).
     static func encodePayload(_ payload: [String: ParsedValue]) throws -> String {
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys]
@@ -31,7 +31,7 @@ extension WhoopStore {
     /// ACTUALLY inserted per stream (0 for rows that already existed).
     ///
     /// NOTE: the `synced` column (added by migration v5 for a since-removed server-upload feature)
-    /// is intentionally NOT written here — it is unused and defaults to 0. The column is left in the
+    /// is intentionally NOT written here, it is unused and defaults to 0. The column is left in the
     /// schema to avoid a DROP COLUMN migration over existing data; nothing reads it.
     @discardableResult
     public func insert(_ streams: Streams, deviceId: String) async throws
@@ -126,18 +126,21 @@ extension WhoopStore {
                     grav += db.changesCount
                 }
             }
-            // WHOOP5 step counter (#78). Persist-only — the count is not surfaced in the return tuple
+            // WHOOP5 step counter (#78). Persist-only, the count is not surfaced in the return tuple
             // (no consumer reads it; keeping the 8-field tuple avoids touching any caller/test).
+            // `activityClass` (#316, v19 column) is the @63 activity-class enum (0=still/1=walk/2=run) the
+            // decoder already carries on each StepSample; it was dropped here before v19. Bound as `s.activityClass`
+            //, nil (the byte was 0xFF/invalid/absent) stores SQL NULL, so an absent class stays absent.
             if !streams.steps.isEmpty {
                 let stmt = try db.cachedStatement(sql: """
-                    INSERT INTO stepSample (deviceId, ts, counter) VALUES (?, ?, ?)
+                    INSERT INTO stepSample (deviceId, ts, counter, activityClass) VALUES (?, ?, ?, ?)
                     ON CONFLICT(deviceId, ts) DO NOTHING
                     """)
                 for s in streams.steps {
-                    try stmt.execute(arguments: [deviceId, s.ts, s.counter])
+                    try stmt.execute(arguments: [deviceId, s.ts, s.counter, s.activityClass])
                 }
             }
-            // PPG-derived HR from the v26 optical buffer (#156). Persist-only, same as steps — the count
+            // PPG-derived HR from the v26 optical buffer (#156). Persist-only, same as steps, the count
             // is not added to the 8-field return tuple (the Backfiller call site reads that tuple by name;
             // extending it would ripple), so it is inserted without being counted. ON CONFLICT DO NOTHING
             // keeps the FIRST estimate for a second; the measured hrSample is never touched here.
@@ -162,7 +165,7 @@ extension WhoopStore {
         "ppg_bpm,ppg_conf,spo2_red,spo2_ir,skintemp_raw,resp_raw,event_kind,event_payload"
 
     /// One assembled CSV line: the 15 columns AFTER the `unix_s,iso_utc` prefix, joined with commas.
-    /// `cols[0]` is the `stream` name; `cols[1...14]` are the per-stream value slots — only the ones
+    /// `cols[0]` is the `stream` name; `cols[1...14]` are the per-stream value slots, only the ones
     /// that belong to this row's stream are non-empty.
     private struct RawCSVRow {
         let ts: Int
@@ -172,7 +175,7 @@ extension WhoopStore {
 
     /// Export the decoded per-sample sensor streams NOOP already stores to ONE combined long-format CSV
     /// (header + one row per sample, all streams interleaved and sorted by ts ascending). On-device,
-    /// plain text, no BLE hex — a diagnostic so power users / external devs can prototype sleep/activity/
+    /// plain text, no BLE hex, a diagnostic so power users / external devs can prototype sleep/activity/
     /// VBT algorithms on real data without a BLE stream (#308/#276/#322).
     ///
     /// `since` is a unix-seconds floor (caller passes now-24h); rows with `ts >= since` for `deviceId`
@@ -262,14 +265,14 @@ extension WhoopStore {
             }
 
             // Stable sort by ts ascending. `sorted` is not guaranteed stable, but ties only occur across
-            // different streams at the same second — any interleaving of those is acceptable here.
+            // different streams at the same second, any interleaving of those is acceptable here.
             out.sort { $0.ts < $1.ts }
             return out
         }
 
         // Stream the rows straight to disk through a FileHandle, flushing in ~64 KB chunks, instead of
         // building the whole CSV as one in-memory String: a busy 24 h export otherwise held tens of MB
-        // twice — the assembled String plus its UTF-8 Data copy that `write(to:)` makes — and could OOM
+        // twice, the assembled String plus its UTF-8 Data copy that `write(to:)` makes, and could OOM
         // (#406, parity with the Android exporter's streaming fix).
         let iso = ISO8601DateFormatter()
         iso.timeZone = TimeZone(identifier: "UTC")
@@ -302,7 +305,7 @@ extension WhoopStore {
     /// Format an Int-valued GRDB column (blank for NULL) without the "Optional(...)" wrapper text.
     private static func intStr(_ v: Int?) -> String { v.map(String.init) ?? "" }
 
-    /// Format a Double-valued GRDB column (blank for NULL). Plain decimal — `String(Double)` is
+    /// Format a Double-valued GRDB column (blank for NULL). Plain decimal, `String(Double)` is
     /// round-trippable and locale-independent, which the comma-delimited CSV needs.
     private static func dblStr(_ v: Double?) -> String { v.map { String($0) } ?? "" }
 
