@@ -243,6 +243,9 @@ struct RootView: View {
             case .fusedRecord: selection = .fusedRecord
             case .rhythm: selection = .rhythm
             case .trends: selection = .trends
+            // The Today active-workout indicator routes to the Live surface; LiveView then consumes the
+            // one-shot `presentActiveWorkout` flag on appear to open the in-exercise screen.
+            case .activeWorkout: selection = .live
             case nil: break
             }
             if dest != nil { router.requestedDestination = nil }

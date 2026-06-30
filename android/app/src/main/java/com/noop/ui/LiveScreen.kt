@@ -133,6 +133,16 @@ fun LiveScreen(viewModel: AppViewModel, onManageDevices: () -> Unit = {}) {
     // the live readout); see the report note.
     var showSportPicker by remember { mutableStateOf(false) }
     var showHrvSnapshot by remember { mutableStateOf(false) }
+    // Live workout mode (#238): the full-screen in-exercise overlay. Normally opened at workout START
+    // (StartWorkoutSheet); this lets the Today "workout in progress" indicator re-open it for a session
+    // already in flight by consuming the ViewModel's one-shot on appear (iOS parity:
+    // LiveView.consumeActiveWorkoutRequest). Closing just hides it; the workout keeps recording.
+    var showLiveWorkout by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        // consumeActiveWorkoutRequest() returns true exactly once per raise, and only while a workout is
+        // active, so a stale flag can never open an empty overlay.
+        if (viewModel.consumeActiveWorkoutRequest()) showLiveWorkout = true
+    }
 
     // GPS workout sport picker — the shared sheet (also used on the Workouts screen, #115). Rendered at
     // body level so it floats over Live as an overlay regardless of list position (unchanged behaviour).
@@ -159,6 +169,19 @@ fun LiveScreen(viewModel: AppViewModel, onManageDevices: () -> Unit = {}) {
                 source = hrvSource,
                 onClose = { showHrvSnapshot = false },
             )
+        }
+    }
+
+    // The full-screen live-workout overlay (#238). A plain full-screen Dialog so it floats over Live, the
+    // same idiom WorkoutStartSection uses; opened by the Today indicator's one-shot above (or a future
+    // in-screen re-open). Guarded on an active workout so it never shows an empty overlay. Dismiss hides it;
+    // End (inside) stops the workout.
+    if (showLiveWorkout && activeWorkout != null) {
+        Dialog(
+            onDismissRequest = { showLiveWorkout = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            LiveWorkoutScreen(vm = viewModel, onClose = { showLiveWorkout = false })
         }
     }
 
@@ -322,7 +345,9 @@ fun LiveScreen(viewModel: AppViewModel, onManageDevices: () -> Unit = {}) {
                         Text("● ${w.sport.name.uppercase()}", style = NoopType.overline, color = Palette.statusCritical)
                         Spacer(Modifier.weight(1f))
                         Text(
-                            String.format("%d:%02d", elapsedS / 60, elapsedS % 60),
+                            // Shared clock: M:SS up to an hour, H:MM:SS past it (so a long session reads
+                            // "1:30:00", not "90:00"), the same format the Today indicator uses.
+                            elapsedClock(elapsedS),
                             style = NoopType.number(22f), color = Palette.textPrimary,
                         )
                     }

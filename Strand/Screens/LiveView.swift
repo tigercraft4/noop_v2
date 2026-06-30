@@ -116,7 +116,7 @@ struct LiveView: View {
                 logCard
             }
         }
-        .onAppear { refreshLiveSession() }
+        .onAppear { refreshLiveSession(); consumeActiveWorkoutRequest() }
         .onDisappear { model.stopRealtimeHR() }
         // A fresh bond/connection re-arms the BLE stream (Apple must re-send startRealtime on a new
         // connection) WITHOUT bumping the ref-count — `refreshLiveSession`'s `startRealtimeHR` already
@@ -940,6 +940,17 @@ struct LiveView: View {
         guard activeConnection else { return }
         model.startRealtimeHR()
         model.getBattery()
+    }
+
+    /// Honour a one-shot "Return to workout" from the Today indicator card: present the in-exercise screen
+    /// for an already-running workout, then clear the flag. The #238 "a workout just started" transition
+    /// trigger never fires for a session that is already in flight, so this is the path that re-opens it.
+    /// Guarded on a live `activeWorkout` so a stale flag can never present an empty live-workout sheet, and
+    /// it sets the SAME `showLiveWorkout` one-shot the manual re-open button uses (no new sheet machinery).
+    private func consumeActiveWorkoutRequest() {
+        guard router.presentActiveWorkout else { return }
+        router.presentActiveWorkout = false
+        if model.activeWorkout != nil { showLiveWorkout = true }
     }
 
     /// A fresh bond/connection landed while the Live tab is up: re-arm the BLE stream (Apple re-sends

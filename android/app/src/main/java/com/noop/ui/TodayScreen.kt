@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -85,6 +86,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -199,11 +201,18 @@ fun TodayScreen(
     onOpenStress: () -> Unit = {},
     onOpenHealth: () -> Unit = {},
     onOpenSleep: () -> Unit = {},
+    // The "workout in progress" indicator card routes to Live and re-opens the in-exercise overlay. Defaulted
+    // to a no-op so the call site stays compiling; AppRoot binds it to openActiveWorkout() + nav.navigate(Live).
+    onOpenActiveWorkout: () -> Unit = {},
 ) {
     val today by viewModel.today.collectAsStateWithLifecycle()
     val alert by viewModel.healthAlert.collectAsStateWithLifecycle()
     val days by viewModel.recentDays.collectAsStateWithLifecycle()
     val live by viewModel.live.collectAsStateWithLifecycle()
+    // The in-flight manual workout (single source of truth, survives an app kill via rehydration), so the
+    // indicator card auto-appears/clears off this alone. Null↔non-null + the start drive the card; the
+    // per-second clock ticks inside the card's own LaunchedEffect, never recomposing the Today body.
+    val activeWorkout by viewModel.activeWorkout.collectAsStateWithLifecycle()
     // PERF (#scroll-jank): the BLE live state ticks the heart rate roughly once a second. Reading the raw
     // `live` object directly in this top-level body would recompose the ENTIRE Today tree (rings, cards,
     // scene-positioning) on every bpm change — visible as scroll stutter on real devices. The body only
@@ -882,6 +891,16 @@ fun TodayScreen(
         }
         }
 
+        // A "workout in progress" indicator whenever a manual workout is active (iOS parity: the Today
+        // ActiveWorkoutIndicator). A tap routes to Live and re-opens the in-exercise overlay. Gated purely on
+        // `activeWorkout`, so it auto-appears/clears with no extra lifecycle wiring. Its per-second clock
+        // ticks inside the card's own LaunchedEffect, never recomposing the Today body.
+        activeWorkout?.let { w ->
+            item {
+                WorkoutInProgressCard(workout = w, onReturn = onOpenActiveWorkout)
+            }
+        }
+
         // Design Reset (iOS parity): the "New here?" first-run card is off the Today dashboard for the
         // clean look — the scoring guide stays reachable from the i on each score and in Settings.
 
@@ -1278,6 +1297,93 @@ fun TodayScreen(
  * accent fill with a hairline rim, the "+" glyph in crisp white. Mirrors the iOS quick-action + (a glyph on
  * Circle().fill(StrandPalette.accent)).
  */
+/**
+ * Today "workout in progress" indicator (iOS parity: ActiveWorkoutIndicatorCard). A metricRose-tinted card
+ * with a decorative live dot + "WORKOUT IN PROGRESS" overline, a live H:MM:SS clock, the sport label, and a
+ * "Return to workout" button. The whole card is tappable; [onReturn] routes to Live and re-opens the
+ * in-exercise overlay. The clock ticks in this card's OWN LaunchedEffect (reading [ActiveWorkout.startMs]),
+ * so the per-second update recomposes only this card, never the Today body. Design tokens only, no glow.
+ */
+@Composable
+private fun WorkoutInProgressCard(
+    workout: AppViewModel.ActiveWorkout,
+    onReturn: () -> Unit,
+) {
+    // Live clock: re-read wall-clock every second and recompute elapsed off the workout's start. Keyed on
+    // startMs so a fresh session restarts the loop. Mirrors the iOS TimelineView(.periodic(by: 1)).
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(workout.startMs) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+    val elapsedS = ((nowMs - workout.startMs) / 1000).coerceAtLeast(0)
+    val elapsed = elapsedClock(elapsedS)
+    val sportLabel = workout.sport.name
+
+    NoopCard(
+        tint = Palette.metricRose,
+        // Combine into ONE actionable element so TalkBack reads "Workout in progress, $sport, $elapsed,
+        // Return to workout" as a single Button, not five stops; the decorative dot is omitted by clearing
+        // child semantics. The whole card is the tap target.
+        modifier = Modifier
+            .clickable(onClick = onReturn)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Workout in progress, $sportLabel, $elapsed. Return to workout."
+            },
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(Metrics.space12)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                // Decorative "live" dot, hidden from TalkBack (the merged card reads the full state).
+                Box(
+                    modifier = Modifier
+                        .size(Metrics.space8)
+                        .clip(CircleShape)
+                        .background(Palette.metricRose)
+                        .clearAndSetSemantics {},
+                )
+                Spacer(Modifier.width(Metrics.space8))
+                Text(
+                    "WORKOUT IN PROGRESS",
+                    style = NoopType.overline,
+                    color = Palette.metricRose,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(elapsed, style = NoopType.number(15f), color = Palette.textPrimary)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    sportLabel,
+                    style = NoopType.headline,
+                    color = Palette.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    // Take the free space (and ellipsize a long sport name) so the button stays its intrinsic
+                    // width on the trailing edge, mirroring the iOS ViewThatFits label + trailing button.
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(Metrics.space8))
+                Button(
+                    onClick = onReturn,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Palette.accent, contentColor = Palette.surfaceBase,
+                    ),
+                ) {
+                    Text("Return to workout", style = NoopType.captionNumber)
+                    Spacer(Modifier.width(Metrics.space6))
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        modifier = Modifier.size(Metrics.iconSmall),
+                    )
+                }
+            }
+        }
+    }
+}
+
 /**
  * The Updates "ringer": a bell glyph on a 36dp inset disc (textSecondary tint) with a small unread-count
  * badge overlaid top-trailing when [unreadCount] > 0. Sized to the uniform 36dp top-bar icon

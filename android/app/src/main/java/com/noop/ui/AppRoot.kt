@@ -312,6 +312,12 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                         onOpenStress = { nav.navigate(Destination.Stress.route) },
                         onOpenHealth = { nav.navigate(Destination.Health.route) },
                         onOpenSleep = { nav.navigateTopLevel(Destination.Sleep.route) },
+                        // The "workout in progress" indicator: raise the one-shot the Live screen consumes to
+                        // re-open the in-exercise overlay, then route to Live. One tap from Today (iOS parity).
+                        onOpenActiveWorkout = {
+                            viewModel.openActiveWorkout()
+                            nav.navigate(Destination.Live.route)
+                        },
                     )
                 }
                 composable(Destination.Live.route) {
