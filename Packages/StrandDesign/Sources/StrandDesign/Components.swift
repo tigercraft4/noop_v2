@@ -12,6 +12,11 @@ public enum NoopMetrics {
     public static let sectionGap: CGFloat = 22   // Apple x WHOOP: breathing room (not cramped)
     public static let screenPadding: CGFloat = 18
     public static let tileHeight: CGFloat = 96   // Design Reset: tighter metric tile
+    // Key Metrics grid: one fixed height every tile snaps to, so a sparkline-and-caption tile and a
+    // plain value tile read the same. maxHeight: .infinity can't equalise them inside a LazyVGrid (the
+    // grid only offers a cell its content height, so there's nothing for the shorter tile to grow into),
+    // so we pin a single height that clears the tallest layout (value + inline sparkline + caption).
+    public static let keyMetricTileHeight: CGFloat = 122
     public static let chartHeight: CGFloat = 220
     public static let hypnogramBandMinThickness: CGFloat = 14  // floor so short stages read as bars, not ticks
     public static let tabBarClearance: CGFloat = 76  // iOS: extra bottom scroll room so the last card clears the floating tab bar
@@ -202,10 +207,11 @@ public struct StatTile<Accessory: View>: View {
             }
         }
         // A FLOOR, not a fixed height: a sparkline tile's content exceeds the 96pt base and must be
-        // allowed to grow instead of overflowing downward into the inter-card gap (which read as an
-        // uneven margin beside its shorter row-mate). maxHeight: .infinity lets a grid cell stretch the
-        // tile to match the tallest tile in its row, so every row's two cards are equal height and the
-        // gaps stay uniform. In an unbounded parent it resolves to the content's own height, unchanged.
+        // allowed to grow rather than clip. maxHeight: .infinity lets a caller that DOES hand this tile a
+        // bounded height (e.g. the Key Metrics grid pins every cell to NoopMetrics.keyMetricTileHeight)
+        // stretch it to fill; in an unbounded parent it resolves to the content's own height, unchanged.
+        // Note: inside a LazyVGrid the cell only offers content height, so equal heights come from the
+        // caller pinning a fixed height, not from maxHeight: .infinity alone.
         .frame(minHeight: NoopMetrics.tileHeight, maxHeight: .infinity)
         // One VoiceOver stop per tile (label, value, caption, delta) instead of up
         // to four fragmented stops; the decorative sparkline is hidden above.
