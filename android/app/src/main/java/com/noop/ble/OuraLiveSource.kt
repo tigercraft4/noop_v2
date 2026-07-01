@@ -208,6 +208,79 @@ class OuraLiveSource(
     /** Logs the FIRST live-HR sample of a connection only; reset on stop/disconnect. */
     private var loggedFirstHr = false
 
+    // MARK: - Auto-reconnect (#912)
+
+    /**
+     * The paired ring's address we should keep re-reaching. Set by [connect]/[connectToDevice], cleared by
+     * [stop]. While it is non-null an INVOLUNTARY drop (or a failed connect) re-issues a connect on a capped
+     * backoff, so the ring comes back on its own once it's in range again, exactly like the WHOOP strap's
+     * auto-reconnect. WHOOP has this loop; the non-WHOOP sources never did, so a dropped Oura ring stayed
+     * down until a manual reconnect. This never touches the WHOOP path or its client.
+     *
+     * @Volatile: written from [connect]/[stop] (main) and read in [scheduleReconnect]'s posted block and
+     * the GATT-delivery-thread disconnect handler, so it needs cross-thread visibility - matching the WHOOP
+     * client's reconnect state.
+     */
+    @Volatile
+    private var reconnectAddress: String? = null
+    /**
+     * True while a teardown was USER/COORDINATOR-initiated ([stop]), so the disconnect handler suppresses
+     * the auto-reconnect (twin of the Swift `intentionalDisconnect` / the WHOOP client's flag). Cleared on
+     * every [connect].
+     *
+     * @Volatile: read on the GATT-delivery thread (onConnectionStateChange) and written on main
+     * ([connect]/[stop]/[announceNeedsPairing]), so it needs cross-thread visibility - same as the WHOOP client.
+     */
+    @Volatile
+    private var intentionalDisconnect = false
+    /**
+     * Consecutive involuntary reconnect attempts, feeding the capped-exponential [ReconnectBackoff] (3, 6,
+     * 12, 24, 48, 60s). Reset to 0 on a successful connect and on an explicit [connect] so a ring genuinely
+     * out of range doesn't hammer BLE. Twin of the WHOOP client's `failedReconnectAttempts` (which is
+     * `@Volatile` for exactly this reason: it's read/reset on the GATT-delivery thread and written on main).
+     */
+    @Volatile
+    private var failedReconnectAttempts = 0
+
+    /**
+     * The pending auto-reconnect, held as a NAMED field (not an anonymous lambda) so [stop] can remove it
+     * from the main-looper handler via [handler.removeCallbacks] - exactly like [reengageRunnable] /
+     * [cancelReengage]. An anonymous `postDelayed` lambda would otherwise be retained by the handler for the
+     * full backoff (up to 60s) after a teardown. It reads the CURRENT [reconnectAddress]: a [stop] nulls
+     * that (and sets [intentionalDisconnect]) so a firing runnable bails, and a fresh [connect] repoints it.
+     */
+    private val reconnectRunnable = Runnable {
+        val address = reconnectAddress
+        if (!intentionalDisconnect && address != null) connect(address)
+    }
+
+    /**
+     * The one-shot status-133 retry, held as a NAMED field (like [reconnectRunnable]) so [stop] can remove
+     * it from the handler rather than letting an anonymous lambda linger for its 1s window after a teardown.
+     * Reads the CURRENT [lastDevice] at fire time (the newest connect target is the right one to retry).
+     */
+    private val retry133Runnable = Runnable {
+        val device = lastDevice
+        if (!intentionalDisconnect && device != null) connectToDevice(device)
+    }
+
+    /**
+     * Schedule an auto-reconnect to the paired ring after a backoff delay, unless the teardown was
+     * intentional or there is no known ring. Guarded again inside [reconnectRunnable]: a [stop] that lands
+     * in the meantime removes the callback AND nulls the target/sets the flag, so a deliberate teardown
+     * never races a stale reconnect. Re-posts the SAME named runnable (removing any prior one first) so at
+     * most one reconnect is ever pending.
+     */
+    private fun scheduleReconnect() {
+        if (intentionalDisconnect) return
+        if (reconnectAddress == null) return
+        failedReconnectAttempts += 1
+        val delay = ReconnectBackoff.nextDelayMs(failedReconnectAttempts)
+        log("Oura: reconnecting in ${delay / 1000}s (attempt $failedReconnectAttempts)")
+        handler.removeCallbacks(reconnectRunnable)
+        handler.postDelayed(reconnectRunnable, delay)
+    }
+
     /** All BLE work hops onto the main looper, matching the other sources + CBCentralManager(queue:.main). */
     private val handler = Handler(Looper.getMainLooper())
 
@@ -301,6 +374,10 @@ class OuraLiveSource(
     fun connect(address: String) {
         stopScan()
         _needsPairing.value = null
+        // Remember the paired ring so an involuntary drop auto-reconnects to it (#912). An explicit connect
+        // is never the intentional-teardown case, so clear the suppression flag.
+        reconnectAddress = address
+        intentionalDisconnect = false
         val device = seen[address] ?: runCatching { adapter?.getRemoteDevice(address) }.getOrNull()
         if (device == null) { pendingConnectAddress = address; return }
         connectToDevice(device)
@@ -337,6 +414,15 @@ class OuraLiveSource(
 
     /** Tear down: cancel the connection and stop scanning, persisting anything still buffered. Idempotent. */
     fun stop() {
+        // A deliberate teardown (device switch / removal) must NOT auto-reconnect: mark it intentional and
+        // drop the reconnect target so any pending backoff bails and no fresh one is scheduled (#912). Remove
+        // any already-posted reconnect from the main-looper handler too, so it isn't retained for the full
+        // backoff (mirrors cancelReengage's removeCallbacks).
+        intentionalDisconnect = true
+        reconnectAddress = null
+        failedReconnectAttempts = 0
+        handler.removeCallbacks(reconnectRunnable)
+        handler.removeCallbacks(retry133Runnable)
         stopScan()
         pendingConnectAddress = null
         cancelReengage()
@@ -436,6 +522,7 @@ class OuraLiveSource(
                         log("Oura: WARNING connected with non-success status=$status")
                     }
                     retried133 = false   // a real connection clears the one-shot 133 retry guard
+                    failedReconnectAttempts = 0   // a real connection clears the reconnect backoff (#912)
                     log("Oura: connected (status=$status) - discovering services")
                     g.discoverServices()
                 }
@@ -453,18 +540,26 @@ class OuraLiveSource(
                     flush()
                     if (gatt === g) { runCatching { g.close() }; gatt = null }
                     // Hardening: status 133 is Android's infamous generic GATT_ERROR on connect - almost
-                    // always transient. Auto-retry ONCE before telling the user to forget+re-pair.
-                    if (status == GATT_ERROR_133) {
-                        val device = lastDevice
-                        if (!retried133 && device != null) {
-                            retried133 = true
-                            log("Oura: connect error 133 - retrying once in 1s")
-                            handler.postDelayed({ connectToDevice(device) }, 1000)
-                        } else {
-                            log("Oura: still failing (133) - try forgetting the ring in Android " +
-                                "Settings → Bluetooth, then re-pair.")
-                        }
+                    // always transient. Auto-retry ONCE (immediately, 1s) before falling through to the
+                    // general capped-backoff auto-reconnect below.
+                    if (status == GATT_ERROR_133 && !retried133 && lastDevice != null && !intentionalDisconnect) {
+                        retried133 = true
+                        log("Oura: connect error 133 - retrying once in 1s")
+                        handler.postDelayed(retry133Runnable, 1000)
+                        return@guardedCallback   // the one-shot 133 retry owns the reconnect for this drop
                     }
+                    if (status == GATT_ERROR_133 && retried133) {
+                        log("Oura: still failing (133) - try forgetting the ring in Android " +
+                            "Settings → Bluetooth, then re-pair.")
+                        // Fall through to the capped-backoff reconnect so a transient 133 storm still recovers
+                        // on its own once the ring settles, rather than giving up until a manual reconnect.
+                    }
+                    // Auto-reconnect on an INVOLUNTARY drop / failed connect (#912): the paired ring went out
+                    // of range or the link dropped. Re-issue a connect on the capped backoff so it comes back
+                    // on its own, exactly like the WHOOP strap. A deliberate stop() set intentionalDisconnect
+                    // and cleared reconnectAddress, so this is a no-op there; a needs-pairing dead-end also
+                    // suppressed it. This owns its OWN scan/GATT and never touches the WHOOP path.
+                    scheduleReconnect()
                 }
             }
         }
@@ -799,6 +894,12 @@ class OuraLiveSource(
         // A failed install must drop its pending key whether or not this is the first announce.
         pendingInstallKey = null
         _adoptPhase.value = AdoptPhase.Failed
+        // This is an honest dead-end (no key / auth rejected / install failed), NOT a transient drop, so a
+        // later disconnect must NOT auto-reconnect (that would loop the same auth failure and drain the
+        // ring). Suppress it the same way a deliberate teardown does (#912); a user reconnect re-arms it.
+        intentionalDisconnect = true
+        reconnectAddress = null
+        failedReconnectAttempts = 0
         if (_needsPairing.value != null) return
         _needsPairing.value = message
         log("Oura: $message")
