@@ -15,10 +15,12 @@ import org.json.JSONObject
 /** A journal item's type: a plain yes/no toggle, or a numeric value with an optional unit label. */
 sealed class JournalKind {
     object Bool : JournalKind()
-    data class Numeric(val unitLabel: String?) : JournalKind()
+    data class Numeric(val unit: String?) : JournalKind()
 
     val isNumeric: Boolean get() = this is Numeric
-    val unitLabel: String? get() = (this as? Numeric)?.unitLabel
+    /// The unit label if this is a numeric kind. Public accessor named `unitLabel`; the constructor
+    /// property is `unit` so it does not shadow this and trip the hidden-member override error.
+    val unitLabel: String? get() = (this as? Numeric)?.unit
 }
 
 /**
@@ -266,7 +268,8 @@ fun decodeJournalCatalog(json: String): List<JournalCatalogItem> {
     val arr = runCatching { JSONArray(json) }.getOrNull() ?: return emptyList()
     for (i in 0 until arr.length()) {
         val o = arr.optJSONObject(i) ?: continue
-        val canonical = o.optString("canonical", "").ifEmpty { continue }
+        val canonical = o.optString("canonical", "")
+        if (canonical.isEmpty()) continue
         val kind = if (o.optString("kind", "bool") == "numeric") {
             JournalKind.Numeric(if (o.has("unitLabel")) o.optString("unitLabel") else null)
         } else JournalKind.Bool
