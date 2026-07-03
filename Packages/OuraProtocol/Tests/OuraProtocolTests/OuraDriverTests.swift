@@ -163,6 +163,104 @@ final class OuraDriverTests: XCTestCase {
         XCTAssertEqual(d.phase, .streaming)
     }
 
+    // MARK: - Ring-time -> UTC anchor (s5.5)
+
+    /// Little-endian bytes of the RAW 0x42 wire value the decoder reads into `OuraTimeSync.epochMs`. The
+    /// wire value is unix SECONDS (s6.11), despite the field's "epochMs" name (which reflects what
+    /// OURA_PROTOCOL.md s6.11 claims, not what the driver now does with it), so tests build this from a
+    /// seconds value.
+    private func le8(_ v: Int64) -> [UInt8] {
+        (0..<8).map { UInt8((UInt64(bitPattern: v) >> (8 * $0)) & 0xFF) }
+    }
+
+    func testNoAnchorBeforeAnyTimeSyncOrBeacon() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key)
+        XCTAssertNil(d.unixSeconds(forRingTimestamp: rt))
+    }
+
+    func testTimeSyncSetsAnchorAndConvertsPastAndFutureRingTimes() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key)
+        let anchorEpochSeconds: Int64 = 1_700_000_000   // the wire's raw value (seconds, not ms)
+        let anchorRt: UInt32 = 10_000
+        let payload = le8(anchorEpochSeconds) + [0x00]   // raw wire epoch (8B) + tz offset (0 half-hours)
+        let rec = OuraRecord(type: OuraEventTag.timeSync.rawValue, ringTimestamp: anchorRt, payload: payload)
+        let events = d.ingest(record: rec)
+        XCTAssertEqual(events, [.timeSync(OuraTimeSync(ringTimestamp: anchorRt, epochMs: anchorEpochSeconds, tzOffsetSeconds: 0))])
+
+        // Exactly at the anchor: the driver applies the x1000 seconds->ms correction internally, so
+        // unixSeconds recovers the ORIGINAL seconds value.
+        XCTAssertEqual(d.unixSeconds(forRingTimestamp: anchorRt), Int(anchorEpochSeconds))
+        // 100 ticks (10s at the default 100ms/tick) BEFORE the anchor -> 10s earlier (a past/historical
+        // record, e.g. from a GetEvents history fetch).
+        XCTAssertEqual(d.unixSeconds(forRingTimestamp: anchorRt - 100), Int(anchorEpochSeconds) - 10)
+        // 100 ticks AFTER the anchor -> 10s later.
+        XCTAssertEqual(d.unixSeconds(forRingTimestamp: anchorRt + 100), Int(anchorEpochSeconds) + 10)
+    }
+
+    func testRtcBeaconOnlyAnchorsWhenNoTimeSyncSeenYet() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key)
+        let beaconRt: UInt32 = 5_000
+        let beaconUnixSeconds = 1_700_000_500
+        // 0x85 rtc_beacon_ind: unix_s u32 LE + 4 reserved + trailer (payload just needs >= 4 bytes).
+        let beaconPayload: [UInt8] = [
+            UInt8(beaconUnixSeconds & 0xFF), UInt8((beaconUnixSeconds >> 8) & 0xFF),
+            UInt8((beaconUnixSeconds >> 16) & 0xFF), UInt8((beaconUnixSeconds >> 24) & 0xFF),
+        ]
+        let beaconRec = OuraRecord(type: OuraEventTag.rtcBeacon.rawValue, ringTimestamp: beaconRt, payload: beaconPayload)
+        _ = d.ingest(record: beaconRec)
+        XCTAssertEqual(d.unixSeconds(forRingTimestamp: beaconRt), beaconUnixSeconds)
+
+        // A later, more precise 0x42 time-sync must override the coarser beacon anchor.
+        let syncEpochSeconds: Int64 = 1_700_001_000
+        let syncRt: UInt32 = 6_000
+        let syncPayload = le8(syncEpochSeconds) + [0x00]
+        let syncRec = OuraRecord(type: OuraEventTag.timeSync.rawValue, ringTimestamp: syncRt, payload: syncPayload)
+        _ = d.ingest(record: syncRec)
+        XCTAssertEqual(d.unixSeconds(forRingTimestamp: syncRt), Int(syncEpochSeconds))
+
+        // A SECOND beacon after a time-sync anchor is already set must NOT override it (secondary only
+        // fills a gap, never displaces the primary source).
+        let laterBeaconRec = OuraRecord(type: OuraEventTag.rtcBeacon.rawValue, ringTimestamp: syncRt + 100,
+                                        payload: beaconPayload)
+        _ = d.ingest(record: laterBeaconRec)
+        XCTAssertEqual(d.unixSeconds(forRingTimestamp: syncRt), Int(syncEpochSeconds),
+                       "a later RTC beacon must not displace an already-set time-sync anchor")
+    }
+
+    func testStopClearsTheAnchor() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key)
+        let payload = le8(1_700_000_000) + [0x00]
+        let rec = OuraRecord(type: OuraEventTag.timeSync.rawValue, ringTimestamp: 1_000, payload: payload)
+        _ = d.ingest(record: rec)
+        XCTAssertNotNil(d.unixSeconds(forRingTimestamp: 1_000))
+        d.stop()
+        XCTAssertNil(d.unixSeconds(forRingTimestamp: 1_000), "a stale anchor must not survive stop()/a new session")
+    }
+
+    /// Regression test for the crash-safety rule (s6.11): a full cursor=0 history dump can hit a 0x42
+    /// record deep in the backlog with an implausible raw value that would overflow Int64 on the naive
+    /// seconds->ms `* 1000` conversion (Swift traps on overflow). The plausibility gate must reject it
+    /// WITHOUT crashing and WITHOUT setting a garbage anchor.
+    func testImplausibleTimeSyncNeverCrashesOrAnchors() {
+        let d = OuraDriver(ringGen: .gen3, authKey: key)
+        let hugePayload = le8(Int64.max) + [0x00]   // the exact class of value that overflows the multiply
+        let hugeRec = OuraRecord(type: OuraEventTag.timeSync.rawValue, ringTimestamp: 1_000, payload: hugePayload)
+        XCTAssertNoThrow(_ = d.ingest(record: hugeRec))
+        XCTAssertNil(d.unixSeconds(forRingTimestamp: 1_000), "an implausible epoch must never become the anchor")
+
+        // A negative epoch (int64 sign bit set on a misaligned record) must be equally rejected.
+        let negativePayload = le8(-1) + [0x00]
+        let negativeRec = OuraRecord(type: OuraEventTag.timeSync.rawValue, ringTimestamp: 2_000, payload: negativePayload)
+        XCTAssertNoThrow(_ = d.ingest(record: negativeRec))
+        XCTAssertNil(d.unixSeconds(forRingTimestamp: 2_000))
+
+        // A GOOD time-sync arriving afterward must still anchor normally (the gate doesn't wedge the driver).
+        let goodPayload = le8(1_700_000_000) + [0x00]
+        let goodRec = OuraRecord(type: OuraEventTag.timeSync.rawValue, ringTimestamp: 3_000, payload: goodPayload)
+        _ = d.ingest(record: goodRec)
+        XCTAssertEqual(d.unixSeconds(forRingTimestamp: 3_000), 1_700_000_000)
+    }
+
     // MARK: - ingest(record:) decoding
 
     func testIngestDecodesTierARecord() {

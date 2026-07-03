@@ -342,7 +342,9 @@ bits 14–15 : qual_b
 - Voltage as **uint16 LE at body offset [4..6]** per [open_ring]. **CONFLICT:** [open_oura-r3] reads percent at body[0]; [open_ring] reads voltage at [4]. **NOOP rule:** read percent at body[0]; derive a voltage-based estimate from [4..6] only as a fallback, fixture-validated per generation.
 
 ### 6.11 Time-sync ind - `0x42` (15 B)
-- Bytes 6–13: **int64 LE epoch milliseconds**; byte 14: int8 timezone offset in 30-min units (×1800 = seconds). [ringverse]
+- Bytes 6–13: an int64 LE epoch value; byte 14: int8 timezone offset in 30-min units (×1800 = seconds). [ringverse]
+- **UNIT = unix SECONDS, not milliseconds.** [ringverse] documents this field as epoch milliseconds, but that citation is unverified and wrong: on real Gen 3 hardware the wire value is unix seconds. Treating it as milliseconds anchors every history-fetched sample to roughly Jan 1970 (about 1000x too early). **NOOP rule:** the decoder (`OuraDecoders.decodeTimeSync`) stays a faithful byte-level parse of the documented layout - `OuraTimeSync.epochMs` still names what the doc claims - but the driver multiplies the decoded value by 1000 before using it as the ms-scale UTC anchor (`OuraDriver`, the `.timeSync` ingest case). Treat this as a single-generation data point until a second ring/generation confirms it.
+- **CRASH-SAFETY RULE: bounds-check any multi-byte wire arithmetic before use.** A full cursor-0 history dump (a ring never synced before) can surface a `0x42` record deep in the backlog whose raw epoch value is wildly implausible (near `Int64.max`) - a misaligned/corrupt record rather than a real time-sync (§2.4: "each notification contains whole frames/records" is the verified-corpus norm, not a guarantee). A naive seconds→ms `× 1000` on such a value overflows `Int64` and traps. **Any arithmetic on a raw multi-byte wire field must be plausibility-checked before use, never trusted as automatically well-formed.** NOOP's driver gates the time-sync / RTC-beacon anchor to a 2020–2035 unix-seconds window before converting (`OuraDriver.plausibleAnchorMs`), rejecting anything outside it as an undecodable record rather than crashing or anchoring to garbage.
 - This is the primary UTC anchor (§5.5). [open_ring][ringverse]
 
 ### 6.12 Sleep architecture
@@ -381,7 +383,7 @@ bits 14–15 : qual_b
 | `0x01` | Research Data (RData) | often server-blocked; returns idle status 3 [open_oura-r3] |
 | `0x02` | Daytime HR | Gen3+; **live-HR path (§5.6)** |
 | `0x03` | Exercise HR (AWHR) | Gen3+; cap version ≥ 2 |
-| `0x04` | SpO2 | Gen3+; server-gated |
+| `0x04` | SpO2 | Gen3+; server-gated. **Confirmed OFF on a real Gen 3 ring:** a `2f 02 20 04` feature-status read returns `04 00 00 00 00` (mode `0x00` = off, status `0x00` = off per §7.2) - SpO2 is switched off for that ring/account, not a NOOP decode issue. SpO2 also never arrives as a live push (unlike HR's feature `0x02`); it only ever arrives via history fetch (§5), same as skin temp. NOOP sends the diagnostic read only; it does NOT try to enable/subscribe SpO2 (a live enable produces nothing during the day regardless). |
 | `0x05` | Bundling | - |
 | `0x06` | Encrypted API | (Oura's encrypted channel - NOOP does NOT use) |
 | `0x07` | Tap-to-tag | - |
