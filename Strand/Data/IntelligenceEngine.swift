@@ -1241,8 +1241,20 @@ final class IntelligenceEngine: ObservableObject {
         // No registry rows (shouldn't happen , v15 seeds one , but be safe): keep the legacy id.
         guard !devices.isEmpty else { return fallbackDeviceId }
 
+        let liveDevices = devices.filter { $0.status != .archived }
+        // #970: the default single-WHOOP install has exactly one live device that IS the fallback id, so
+        // the owner is a foregone conclusion — the resolver returns that id whether or not it has data in
+        // this window (active priority 0 -> its id; or no candidate has data -> nil -> fallbackDeviceId,
+        // both == fallbackDeviceId here). Skip the per-day LIMIT-1 HR probe in that case (called once per
+        // scanned day, so it saves ~maxDays tiny reads per analyzeRecent). Byte-identical to the loop. The
+        // guard is deliberately `== fallbackDeviceId`: a lone IMPORT device whose id differs would NOT be
+        // byte-identical (no-data -> fallback, not its own id), so it must still take the probe path.
+        if liveDevices.count == 1, liveDevices[0].id == fallbackDeviceId {
+            return fallbackDeviceId
+        }
+
         var candidates: [DayOwnerResolver.Candidate] = []
-        for d in devices where d.status != .archived {
+        for d in liveDevices {
             let isImport = d.sourceKind == .cloudImport || d.sourceKind == .fileImport
             let priority = d.id == activeId ? 0 : (isImport ? 2 : 1)
             // Cheap presence check: a single HR row for this device in the night window is enough to
