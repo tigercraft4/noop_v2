@@ -96,6 +96,11 @@ class DeviceRegistryTest {
             deletedTables += "dayOwnership" to deviceId
             owners.entries.removeIf { it.value.deviceId == deviceId }
         }
+        override suspend fun deleteSleepStatesFor(deviceId: String) { deletedTables += "sleepStateSample" to deviceId }
+        override suspend fun deleteLabMarkersFor(deviceId: String) { deletedTables += "labMarker" to deviceId }
+        override suspend fun deleteLiveSessionsFor(deviceId: String) { deletedTables += "liveSession" to deviceId }
+        override suspend fun deleteDismissedWorkoutsFor(deviceId: String) { deletedTables += "dismissedWorkout" to deviceId }
+        override suspend fun deleteDismissedSleepsFor(deviceId: String) { deletedTables += "dismissedSleep" to deviceId }
     }
 
     /** Registry over the fake DAO with a pass-through transactor (Room's withTransaction stand-in). */
@@ -193,11 +198,14 @@ class DeviceRegistryTest {
 
         reg.deleteDeviceData("apple-health")
 
-        // The same 17 device-scoped tables the Swift store clears, each targeted with "apple-health".
+        // EVERY device-keyed table the fan-out must clear (mirrors the Swift store's deviceScopedTables).
+        // Keep in sync with the deviceId-keyed @Entity list in Entities.kt — the audit found the last five
+        // were missing, leaving raw sleep-state, lab markers, live sessions and dismissed markers behind.
         val expectedTables = setOf(
             "hrSample", "rrInterval", "spo2Sample", "skinTempSample", "respSample", "gravitySample",
             "stepSample", "ppgHrSample", "event", "battery", "dailyMetric", "sleepSession",
             "journal", "workout", "appleDaily", "metricSeries", "dayOwnership",
+            "sleepStateSample", "labMarker", "liveSession", "dismissedWorkout", "dismissedSleep",
         )
         assertEquals(expectedTables, dao.deletedTables.map { it.first }.toSet())
         // Every delete was scoped to the requested device, not the seeded my-whoop.
