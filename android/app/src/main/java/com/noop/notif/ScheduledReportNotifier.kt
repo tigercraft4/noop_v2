@@ -95,8 +95,12 @@ object ScheduledReportPolicy {
 
 object ScheduledReportNotifier {
     private const val CHANNEL_ID = "noop_scheduled_reports"
-    private const val MORNING_NOTIF_ID = 4203 // 4201 ongoing, 4202 illness
-    private const val WORKOUT_NOTIF_ID = 4204
+    // Distinct ids (audit): 4203/4204 were shared with InactivityNotifier/BatteryAlertNotifier/
+    // SmartAlarmNotifier; an untagged notify() collision silently overwrote unrelated notifications.
+    // Map: 4201 connection, 4202 illness, 4203 inactivity, 4204 smart alarm, 4205/4206 battery,
+    // 4207/4208 scheduled report.
+    private const val MORNING_NOTIF_ID = 4207
+    private const val WORKOUT_NOTIF_ID = 4208
 
     /**
      * Post the morning recap if enabled and not already posted today. [chargePct]/[restPct] are the

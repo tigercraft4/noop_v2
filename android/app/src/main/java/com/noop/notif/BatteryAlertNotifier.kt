@@ -75,8 +75,12 @@ internal object BatteryAlertPolicy {
  */
 object BatteryAlertNotifier {
     private const val CHANNEL_ID = "noop_battery_alert"
-    private const val NOTIF_ID_LOW = 4203
-    private const val NOTIF_ID_FULL = 4204
+    // Distinct ids (audit): 4203/4204 were shared with InactivityNotifier/SmartAlarmNotifier/
+    // ScheduledReportNotifier, so an untagged notify() collision silently overwrote unrelated
+    // notifications (e.g. a low-battery warning replacing the morning recap). Map: 4201 connection,
+    // 4202 illness, 4203 inactivity, 4204 smart alarm, 4205/4206 battery, 4207/4208 scheduled report.
+    private const val NOTIF_ID_LOW = 4205
+    private const val NOTIF_ID_FULL = 4206
 
     @SuppressLint("MissingPermission") // guarded by areNotificationsEnabled() + runCatching
     fun onBatteryUpdate(context: Context, currPct: Int?, charging: Boolean?) {
