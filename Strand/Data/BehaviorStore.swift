@@ -52,6 +52,11 @@ final class BehaviorStore: ObservableObject {
     /// batteryAlerts (both must be on). Default ON so pre-toggle behavior is unchanged.
     @Published var batteryPredictiveAlerts: Bool { didSet { d.set(batteryPredictiveAlerts, forKey: K.batteryPredictiveAlerts) } }
 
+    // MARK: Strain goal
+    /// Notify once per day when today's Strain first reaches the recovery-based optimal-Strain floor
+    /// (#593). Default OFF — opt-in like every other automation here.
+    @Published var strainGoalAlerts: Bool { didSet { d.set(strainGoalAlerts, forKey: K.strainGoalAlerts) } }
+
     private let d = UserDefaults.standard
     private enum K {
         static let dtAction = "behavior.doubleTapAction"
@@ -74,6 +79,7 @@ final class BehaviorStore: ObservableObject {
         static let illness = "behavior.illnessWatch"
         static let batteryAlerts = "behavior.batteryAlerts"
         static let batteryPredictiveAlerts = "behavior.batteryPredictiveAlerts"
+        static let strainGoalAlerts = "behavior.strainGoalAlerts"
     }
 
     init() {
@@ -95,6 +101,7 @@ final class BehaviorStore: ObservableObject {
         illnessWatch = d.object(forKey: K.illness) as? Bool ?? false
         batteryAlerts = d.object(forKey: K.batteryAlerts) as? Bool ?? true
         batteryPredictiveAlerts = d.object(forKey: K.batteryPredictiveAlerts) as? Bool ?? true
+        strainGoalAlerts = d.object(forKey: K.strainGoalAlerts) as? Bool ?? false
     }
 
     // MARK: Charge baseline recalibration

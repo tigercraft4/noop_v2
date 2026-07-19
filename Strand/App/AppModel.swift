@@ -265,6 +265,9 @@ final class AppModel: ObservableObject {
         $bpm.sink { [weak self] hr in self?.coachZone(hr) }.store(in: &hrCancellables)
         // Illness/strain early-warning recomputes when the daily history changes.
         repo.$days.sink { [weak self] days in self?.evaluateIllness(days) }.store(in: &hrCancellables)
+        // Target Strain Reached (#593): re-check today's row against the recovery-based optimal-Strain
+        // floor whenever the daily history changes (a strain re-score, not just a fresh day).
+        repo.$days.sink { [weak self] days in self?.evaluateStrainGoal(days) }.store(in: &hrCancellables)
         // Re-arm the strap's firmware alarm once the connection has SETTLED — not the instant it (re)bonds.
         // A smart-alarm time changed while the strap was away never reached it , the send is gated on bond
         // , so the strap kept the OLD time and fired at it (#59).
@@ -1332,6 +1335,18 @@ final class AppModel: ObservableObject {
     /// (alcohol / a hard-or-late workout / etc.) so a night out doesn't cry wolf. The journal context is
     /// read asynchronously, so this kicks a Task; the published `illnessSignal` + the `healthAlert`
     /// banner both come from the engine's single decision. On-device only, APPROXIMATE , not a diagnosis.
+    /// Target Strain Reached (#593): fire once per day when today's Strain first reaches the
+    /// recovery-based optimal-Strain floor (`optimalStrainRange`) — the one "target" NOOP can honestly
+    /// compute (the official app's undocumented per-activity target isn't something NOOP has visibility
+    /// into; the notification copy says "today", not "for this activity"). Uses `Repository.widgetAnchor`
+    /// to find the row Today actually displays, same as the Home/Lock widget and Live Activity.
+    private func evaluateStrainGoal(_ days: [DailyMetric]) {
+        guard let today = Repository.widgetAnchor(days: days) else { return }
+        let target = CoupledView.optimalStrainRange(recovery: today.recovery).map { Double($0.lowerBound) }
+        StrainGoalNotifier.onStrainUpdate(day: today.day, strain: today.strain, targetStrain: target,
+                                          enabled: behavior.strainGoalAlerts)
+    }
+
     private func evaluateIllness(_ days: [DailyMetric]) {
         guard behavior.illnessWatch, days.count >= 14 else {
             healthAlert = nil; illnessSignal = nil; illnessDistance = nil; return
@@ -1443,6 +1458,13 @@ final class AppModel: ObservableObject {
     /// for the next refresh.
     func reevaluateIllness() {
         evaluateIllness(repo.days)
+    }
+
+    /// Re-run the strain-goal check over the cached history. Called when the Automations toggle flips,
+    /// the repo.$days sink only fires on data changes, so a flip would otherwise wait for the next
+    /// refresh (#593).
+    func reevaluateStrainGoal() {
+        evaluateStrainGoal(repo.days)
     }
 
     // MARK: - v5 skin-temp suite engines (cycle phase + body clock)

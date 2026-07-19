@@ -53,6 +53,7 @@ struct AutomationsView: View {
             // wake/wind-down control lives in one place. Automations is just inputs-to-actions now.
             inactivityCard
             illnessCard
+            strainGoalCard
             healthInsightsCard
             batteryCard
         }
@@ -296,6 +297,22 @@ struct AutomationsView: View {
                 .onChangeCompat(of: behavior.illnessWatch) { _ in
                     model.reevaluateIllness()
                     if behavior.illnessWatch { IllnessNotifier.requestAuthorization() }
+                }
+        }
+    }
+
+    // MARK: - Strain goal
+
+    private var strainGoalCard: some View {
+        Section2(icon: "bolt.heart", title: String(localized: "Strain goal"),
+                 blurb: String(localized: "Notifies you once a day when your Strain first reaches your recovery-based optimal-Strain target."),
+                 active: behavior.strainGoalAlerts) {
+            ToggleRow(label: String(localized: "Target Strain Reached"),
+                      help: String(localized: "Fires at most once a day, the moment your Strain reaches the low end of today's optimal range for your Recovery."),
+                      isOn: $behavior.strainGoalAlerts)
+                .onChangeCompat(of: behavior.strainGoalAlerts) { _ in
+                    model.reevaluateStrainGoal()
+                    if behavior.strainGoalAlerts { StrainGoalNotifier.requestAuthorization() }
                 }
         }
     }
