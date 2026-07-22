@@ -56,6 +56,9 @@ internal fun SettingsDisclosureGroup(
         targetValue = if (expanded) 0f else -90f,
         label = uiString(R.string.l10n_settings_screen_advancedchevron_f22dfa01),
     )
+    val disclosureStateDescription = uiString(
+        if (expanded) R.string.settings_disclosure_expanded else R.string.settings_disclosure_collapsed,
+    )
     val headerInteraction = remember { MutableInteractionSource() }
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.screenRowSpacing)) {
         Row(
@@ -70,7 +73,7 @@ internal fun SettingsDisclosureGroup(
                 )
                 .semantics {
                     contentDescription = title
-                    stateDescription = if (expanded) "Expanded" else "Collapsed"
+                    stateDescription = disclosureStateDescription
                 },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
