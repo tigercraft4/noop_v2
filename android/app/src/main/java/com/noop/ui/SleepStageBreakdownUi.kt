@@ -1,0 +1,235 @@
+package com.noop.ui
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.noop.R
+import java.util.Locale
+import kotlin.math.roundToInt
+
+/**
+ * The four WHOOP-style stage rows that replace the old "label · value" footer grid, read like WHOOP's
+ * sleep detail: a colour swatch, the UPPERCASE stage name, the share-of-night % in the stage colour, a
+ * segmented [PipBar] (the NOOP signature) tinted in the stage colour, and the right-aligned duration.
+ * Same data as the prior footer (rem / deep / light / awake over total) — no new numbers. Mirrors the
+ * macOS SleepView.stageBreakdownRows. (PipBar)
+ */
+@Composable
+internal fun StageBreakdownRows(s: Stages) {
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.space12)) {
+        StageBreakdownRow("REM", s.rem, s.total, Palette.sleepREM)
+        StageBreakdownRow("Deep", s.deep, s.total, Palette.sleepDeep)
+        StageBreakdownRow("Light", s.light, s.total, Palette.sleepLight)
+        StageBreakdownRow("Awake", s.awake, s.total, Palette.sleepAwake)
+    }
+}
+
+/**
+ * One WHOOP-style stage row. `fraction = minutes / total` sets both the % and the PipBar fill, so the
+ * coloured percent and the segmented bar always agree. Mirrors the macOS SleepView.stageBreakdownRow.
+ */
+@Composable
+private fun StageBreakdownRow(stage: String, minutes: Double, total: Double, color: Color) {
+    val fraction = if (total > 0.0) (minutes / total).coerceIn(0.0, 1.0) else 0.0
+    val percent = (fraction * 100.0).roundToInt()
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Metrics.space10),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics {
+                contentDescription =
+                    uiString(R.string.l10n_sleep_screen_stage_durationtext_minutes_percent_percent_of_477dbf14, stage, durationText(minutes), percent)
+            },
+    ) {
+        Box(
+            modifier = Modifier
+                .size(12.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(color),
+        )
+        Text(
+            stage.uppercase(Locale.getDefault()),
+            style = NoopType.overline,
+            color = Palette.textPrimary,
+            maxLines = 1,
+            modifier = Modifier.width(56.dp),
+        )
+        Text(
+            uiString(R.string.l10n_sleep_screen_percent_2281d326, percent),
+            style = NoopType.captionNumber,
+            color = color,
+            maxLines = 1,
+            modifier = Modifier.width(38.dp),
+        )
+        // The stage's share-of-night as a liquid TUBE tinted in the stage colour — a genuine single-value
+        // progress bar (minutes / total), so it liquid-ifies cleanly. Posed static (animated = false): a
+        // hero card carries many stage rows, so a per-frame slosh per row isn't worth the cost — the tube
+        // reads as a filled liquid level, matching the pilot's non-hero tubes. Same fraction the % + the
+        // duration carry, so all three agree.
+        LiquidTube(
+            frac = fraction,
+            tint = color,
+            animated = false,
+            height = 8.dp,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            durationText(minutes),
+            style = NoopType.captionNumber,
+            color = Palette.textPrimary,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            modifier = Modifier.width(60.dp),
+        )
+    }
+}
+
+/**
+ * The hero hypnogram strip plus an optional onset · midpoint · wake time axis. Mirrors the Swift
+ * Hypnogram(showsTimeAxis:): a proportional stage strip with a per-segment WIDTH floor (so a brief
+ * stage — especially a short Awake blip — reads as a rounded block, not a hairline tick), three
+ * faint vertical hairlines at frac 0 / 0.5 / 1.0, and a clock-label row underneath. The axis only
+ * appears when the session supplies onset/wake timestamps; otherwise this is just the floored strip.
+ * Presentation-only — the segment weights and stage→colour mapping are unchanged.
+ */
+@Composable
+internal fun HypnogramWithAxis(
+    stages: List<Pair<String, Float>>,
+    onsetTs: Long?,
+    wakeTs: Long?,
+) {
+    val showsAxis = onsetTs != null && wakeTs != null
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.space6)) {
+        Canvas(modifier = Modifier.fillMaxWidth().height(Metrics.stageStripHeight)) {
+            val w = size.width
+            val h = size.height
+            if (w <= 0f || h <= 0f) return@Canvas
+
+            // Inset well so the strip reads as a recessed track (matches the shared Hypnogram).
+            drawLine(
+                color = Palette.surfaceInset,
+                start = Offset(0f, h / 2f),
+                end = Offset(w, h / 2f),
+                strokeWidth = h,
+                cap = StrokeCap.Round,
+            )
+
+            val weights = stages.map { it.second }.map { if (it.isFinite() && it > 0f) it else 0f }
+            val total = weights.sum()
+            if (stages.isEmpty() || total <= 0f) return@Canvas
+
+            // WIDTH floor: a segment narrower than this reads as a hairline, so floor short stages to a
+            // legible block. But the FLOORED widths can sum past the canvas on a fragmented night (many
+            // short segments), and the old loop advanced `x` by the floored width — so the tail ran off
+            // the canvas and clipped, leaving only the first ~w/h segments visible as a row of circles
+            // (#36). Fix: floor every segment, then if the floored total overflows, scale them ALL to fit
+            // so the strip stays a continuous bar for the WHOLE night. Draw rounded RECTS (not round-capped
+            // lines, whose h-wide round cap turned any sub-h segment into a full circle) advancing by the
+            // SAME width we draw, so `x` can never exceed the canvas.
+            val minSegW = h / 2f
+            val floored = weights.map { wt -> if (wt > 0f) maxOf(w * (wt / total), minSegW) else 0f }
+            val flooredSum = floored.sum()
+            val scale = if (flooredSum > w) w / flooredSum else 1f
+            val radius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+            var x = 0f
+            stages.forEachIndexed { i, (name, _) ->
+                val segW = floored[i] * scale
+                if (segW <= 0f) return@forEachIndexed
+                drawRoundRect(
+                    color = stageColorFor(name),
+                    topLeft = Offset(x, 0f),
+                    size = Size(segW.coerceAtMost(w - x), h),
+                    cornerRadius = radius,
+                )
+                x += segW
+            }
+
+            // Time-axis vertical hairlines: onset · midpoint · wake.
+            if (showsAxis) {
+                listOf(0f, 0.5f, 1f).forEach { frac ->
+                    val hx = w * frac
+                    drawLine(
+                        color = Palette.hairline,
+                        start = Offset(hx, 0f),
+                        end = Offset(hx, h),
+                        strokeWidth = 1f,
+                    )
+                }
+            }
+        }
+        if (showsAxis && onsetTs != null && wakeTs != null) {
+            ClockLabelRow(onsetTs, wakeTs)
+        }
+    }
+}
+
+/**
+ * The onset · midpoint · wake clock-label row under a night timeline. Extracted from
+ * [HypnogramWithAxis] so the #988 stage-timeline rows share the exact same axis rendering.
+ */
+@Composable
+internal fun ClockLabelRow(onsetTs: Long, wakeTs: Long) {
+    val onset = clockTimeLabel(onsetTs)
+    val mid = clockTimeLabel((onsetTs + wakeTs) / 2L)
+    val wake = clockTimeLabel(wakeTs)
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            onset,
+            style = NoopType.footnote,
+            color = Palette.textTertiary,
+            textAlign = TextAlign.Start,
+            maxLines = 1,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            mid,
+            style = NoopType.footnote,
+            color = Palette.textTertiary,
+            textAlign = TextAlign.Center,
+            overflow = TextOverflow.Ellipsis,
+            maxLines = 1,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            wake,
+            style = NoopType.footnote,
+            color = Palette.textTertiary,
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/** Map a stage name to its design-system sleep tone (case-insensitive). */
+private fun stageColorFor(name: String): Color = when (name.trim().lowercase()) {
+    "deep" -> Palette.sleepDeep
+    "rem" -> Palette.sleepREM
+    "light" -> Palette.sleepLight
+    "awake", "wake" -> Palette.sleepAwake
+    else -> Palette.sleepLight
+}
