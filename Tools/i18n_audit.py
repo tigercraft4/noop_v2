@@ -12,8 +12,8 @@ Two independent problems, both covered here:
    language's translation is missing from the String Catalog / strings.xml.
    Reported as MISSING_<LANG>.
 
-Target languages: de, es, fr (the focus set). English is the source language
-and is not checked for itself.
+Target languages: de, es, fr, pt-PT (the focus set). English is the source
+language and is not checked for itself.
 
 Read-only. Prints a report; does not modify any file. Re-runnable, and the
 same logic is meant to be wired into a CI check later (see i18n-coverage.yml)
@@ -31,7 +31,13 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LANGS = ["de", "es", "fr"]
+LANGS = ["de", "es", "fr", "pt-PT"]
+ANDROID_LOCALE_DIRS = {
+    "de": "values-de",
+    "es": "values-es",
+    "fr": "values-fr",
+    "pt-PT": "values-pt-rPT",
+}
 
 # Strings that are legitimately identical across all languages (symbols,
 # format-only placeholders, brand name, units) — mirrors the exclude
@@ -467,7 +473,7 @@ def scan_android() -> list[tuple[str, int, str]]:
 
 def android_strings_xml_gaps() -> dict[str, set[str]]:
     """Keys present in the base values/strings.xml but missing from an
-    existing values-<lang>/strings.xml. (Doesn't invent missing locale dirs —
+    existing values-<locale>/strings.xml. (Doesn't invent missing locale dirs —
     see the audit summary for languages with NO directory at all.)"""
     base_path = ROOT / "android/app/src/main/res/values/strings.xml"
     # <plurals> count too: converting a hand-rolled singular/plural PAIR into one <plurals> would
@@ -477,9 +483,10 @@ def android_strings_xml_gaps() -> dict[str, set[str]]:
     exempt = {"app_name"}  # brand name, deliberately identical everywhere
     gaps: dict[str, set[str]] = {}
     for lang in LANGS:
-        lang_path = ROOT / f"android/app/src/main/res/values-{lang}/strings.xml"
+        locale_dir = ANDROID_LOCALE_DIRS[lang]
+        lang_path = ROOT / f"android/app/src/main/res/{locale_dir}/strings.xml"
         if not lang_path.exists():
-            gaps[lang] = {"<entire values-%s/ directory is missing>" % lang}
+            gaps[lang] = {"<entire %s/ directory is missing>" % locale_dir}
             continue
         lang_keys = set(re.findall(r'<(?:string|plurals) name="([^"]+)"', lang_path.read_text(encoding="utf-8")))
         missing = (base_keys - exempt) - lang_keys
@@ -495,7 +502,10 @@ def android_format_gaps() -> dict[str, list[str]]:
     """Resource keys whose translated Formatter arguments differ from English."""
     paths = {
         "en": ROOT / "android/app/src/main/res/values/strings.xml",
-        **{lang: ROOT / f"android/app/src/main/res/values-{lang}/strings.xml" for lang in LANGS},
+        **{
+            lang: ROOT / f"android/app/src/main/res/{ANDROID_LOCALE_DIRS[lang]}/strings.xml"
+            for lang in LANGS
+        },
     }
     def signature(value: str) -> list[str]:
         return sorted(ANDROID_FORMAT_PATTERN.findall(value))
@@ -918,13 +928,16 @@ def ci_check(base_ref: str) -> int:
         gaps = android_gaps.get(lang)
         if gaps:
             failed = True
-            print(f"FAIL values-{lang}/strings.xml missing {len(gaps)} key(s): {sorted(gaps)[:30]}")
+            locale_dir = ANDROID_LOCALE_DIRS[lang]
+            print(f"FAIL {locale_dir}/strings.xml missing {len(gaps)} key(s): {sorted(gaps)[:30]}")
         else:
-            print(f"  OK values-{lang}/strings.xml")
+            locale_dir = ANDROID_LOCALE_DIRS[lang]
+            print(f"  OK {locale_dir}/strings.xml")
         format_gaps = android_formats.get(lang)
         if format_gaps:
             failed = True
-            print(f"FAIL values-{lang}/strings.xml has {len(format_gaps)} format mismatch(es): {format_gaps[:30]}")
+            locale_dir = ANDROID_LOCALE_DIRS[lang]
+            print(f"FAIL {locale_dir}/strings.xml has {len(format_gaps)} format mismatch(es): {format_gaps[:30]}")
 
     print("\n--- Apple: no NEW un-extracted UI copy, and complete focus locales ---")
     ios_literals, _source_gaps = scan_ios()
@@ -1007,10 +1020,10 @@ def main() -> int:
             if len(findings) > 25:
                 print(f"  ... and {len(findings) - 25} more (use --full)")
 
-        print("\n=== Android: values-<lang>/strings.xml key gaps ===")
+        print("\n=== Android: values-<locale>/strings.xml key gaps ===")
         gaps = android_strings_xml_gaps()
         if not gaps:
-            print("  none (de/es/fr all present and complete, or no locale dir exists)")
+            print("  none (focus locales all present and complete, or no locale dir exists)")
         for lang, keys in gaps.items():
             print(f"  {lang}: {len(keys)} gap(s)")
             if args.full:
