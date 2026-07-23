@@ -327,6 +327,7 @@
     <string name="l10n_coach_screen_e_g_gpt_4o_1da2e4d2">e.g. gpt-4o</string>
     <string name="l10n_coach_screen_enter_any_model_id_the_provider_dce4bbcb">Enter any model id the provider accepts.</string>
     <string name="l10n_coach_screen_fetch_models_from_provider_6654e1a0">Fetch models from provider</string>
+    <string name="l10n_coach_screen_key_header_3f2a9b10">Key header</string>
     <string name="l10n_coach_screen_let_the_coach_use_my_data_405d1188">Let the coach use my data</string>
     <string name="l10n_coach_screen_model_selected_tap_to_change_043056c1">Model: %1$s. Tap to change.</string>
     <string name="l10n_coach_screen_provider_displayname_model_8b39f761">%1$s · %2$s</string>
@@ -336,6 +337,7 @@
     <string name="l10n_coach_screen_server_url_1d5d1eff">Server URL</string>
     <string name="l10n_coach_screen_suggested_prompt_prompt_379c0b15">Suggested prompt: %1$s</string>
     <string name="l10n_coach_screen_thinking_a60d9c9c">Thinking…</string>
+    <string name="l10n_coach_screen_use_bearer_for_most_local_servers_4429ab64">Use Bearer for most local servers; use x-api-key for gateways that require the key in that header.</string>
     <string name="l10n_coach_screen_use_model_8d558ce2">Use model</string>
     <string name="l10n_compare_screen_add_a_metric_to_compare_e6a7c9f1">Add a metric to compare</string>
     <string name="l10n_compare_screen_compare_8d105cf4">Compare</string>

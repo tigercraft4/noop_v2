@@ -318,6 +318,7 @@
     <string name="l10n_coach_screen_e_g_gpt_4o_1da2e4d2">z. B. gpt-4o</string>
     <string name="l10n_coach_screen_enter_any_model_id_the_provider_dce4bbcb">Geben Sie eine Modell-ID ein, die der Anbieter akzeptiert.</string>
     <string name="l10n_coach_screen_fetch_models_from_provider_6654e1a0">Modelle von Anbietern abrufen</string>
+    <string name="l10n_coach_screen_key_header_3f2a9b10">Schlüssel-Header</string>
     <string name="l10n_coach_screen_let_the_coach_use_my_data_405d1188">Dem Coach erlauben, meine Daten zu nutzen</string>
     <string name="l10n_coach_screen_model_selected_tap_to_change_043056c1">Modell: %1$s. Tap zum Ändern.</string>
     <string name="l10n_coach_screen_provider_displayname_model_8b39f761">%1$s · %2$s</string>
@@ -327,6 +328,7 @@
     <string name="l10n_coach_screen_server_url_1d5d1eff">Server-URL</string>
     <string name="l10n_coach_screen_suggested_prompt_prompt_379c0b15">Vorgeschlagene Aufforderung: %1$s</string>
     <string name="l10n_coach_screen_thinking_a60d9c9c">Denken...</string>
+    <string name="l10n_coach_screen_use_bearer_for_most_local_servers_4429ab64">Verwende Bearer für die meisten lokalen Server; verwende x-api-key für Gateways, die den Schlüssel in diesem Header verlangen.</string>
     <string name="l10n_coach_screen_use_model_8d558ce2">Verwendungsmodell</string>
     <string name="l10n_compare_screen_add_a_metric_to_compare_e6a7c9f1">Eine Metrik zum Vergleich hinzufügen</string>
     <string name="l10n_compare_screen_compare_8d105cf4">Vergleichen</string>
