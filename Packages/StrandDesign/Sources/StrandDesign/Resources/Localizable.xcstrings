@@ -328,7 +328,7 @@
         "pt-PT": {
           "stringUnit": {
             "state": "translated",
-            "value": "%l há pouco"
+            "value": "há %lld h"
           }
         },
         "ru": {
@@ -374,7 +374,7 @@
         "pt-PT": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lhá muito tempo"
+            "value": "há %lld min"
           }
         },
         "ru": {
