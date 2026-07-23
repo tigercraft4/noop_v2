@@ -394,7 +394,9 @@ struct CoachView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
+                        // Lazy so off-screen bubbles aren't all resident/laid-out at once; with the
+                        // `maxStoredMessages` cap the transcript is already bounded, this keeps render cost flat.
+                        LazyVStack(alignment: .leading, spacing: 12) {
                             ForEach(coach.messages) { message in
                                 bubble(message).id(message.id)
                             }
