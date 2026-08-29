@@ -132,6 +132,7 @@ import kotlin.math.roundToInt
 fun SleepScreen(
     vm: AppViewModel,
     onOpenJournal: () -> Unit = {},
+    onOpenCoach: (String) -> Unit = {},
 ) {
     val days by vm.recentDays.collectAsStateWithLifecycle()
     // Whether the ACTIVE strap is an Oura ring, off the canonical brand table (not an "oura" literal) — so
@@ -395,6 +396,18 @@ fun SleepScreen(
     LazyScreenScaffold(
         title = uiString(R.string.l10n_sleep_screen_sleep_3cac34e6),
         subtitle = "Last night, read in two seconds.",
+        trailing = {
+            Text(
+                "Ask Coach",
+                style = NoopType.footnote,
+                color = Palette.accent,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable { onOpenCoach("Sleep: compare last night with my recent pattern. Cite duration, rest and stages when available.") }
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .semantics { contentDescription = "Ask Coach about last night's sleep" },
+            )
+        },
         // LIQUID SKY BACKDROP (the pilot pattern — LiquidScreenSky.kt): the static time-of-day liquid sky
         // settles into the theme canvas behind the header + hero, bled full-width up behind the status bar
         // via the scaffold's topBackground plumbing. Gated on the day-cycle preference exactly like Today

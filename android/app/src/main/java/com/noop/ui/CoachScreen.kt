@@ -35,6 +35,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,7 +68,11 @@ import com.noop.ai.ChatMsg
  * Palette / StatePill / SegmentedPillControl), dark Material3.
  */
 @Composable
-fun CoachScreen(vm: CoachViewModel = viewModel()) {
+fun CoachScreen(
+    vm: CoachViewModel = viewModel(),
+    initialPrompt: String? = null,
+    onInitialPromptConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val keyVersion by vm.keyVersion.collectAsStateWithLifecycle()
     val provider by vm.provider.collectAsStateWithLifecycle()
@@ -93,7 +98,7 @@ fun CoachScreen(vm: CoachViewModel = viewModel()) {
         if (!configured) {
             CoachSetup(vm = vm)
         } else {
-            CoachChat(vm = vm)
+            CoachChat(vm = vm, initialPrompt = initialPrompt, onInitialPromptConsumed = onInitialPromptConsumed)
         }
     }
 }
@@ -215,7 +220,11 @@ private fun CoachSetup(vm: CoachViewModel) {
 // MARK: - Chat (key saved)
 
 @Composable
-private fun CoachChat(vm: CoachViewModel) {
+private fun CoachChat(
+    vm: CoachViewModel,
+    initialPrompt: String? = null,
+    onInitialPromptConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val messages by vm.messages.collectAsStateWithLifecycle()
     val sending by vm.sending.collectAsStateWithLifecycle()
@@ -223,6 +232,12 @@ private fun CoachChat(vm: CoachViewModel) {
     val provider by vm.provider.collectAsStateWithLifecycle()
     val model by vm.model.collectAsStateWithLifecycle()
     var input by remember { mutableStateOf("") }
+    LaunchedEffect(initialPrompt) {
+        if (!initialPrompt.isNullOrBlank()) {
+            input = initialPrompt
+            onInitialPromptConsumed()
+        }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
 
@@ -479,16 +494,16 @@ private fun ThinkingBubble() {
 // MARK: - Suggested prompts
 
 private val SUGGESTED_PROMPTS = listOf(
-    "How's my recovery trending this week?",
-    "Should I train hard or take it easy today?",
-    "Why might my HRV be low lately?",
-    "How can I improve my sleep?",
+    "Today: explain my readiness from charge, HRV and rest. Cite the numbers you used and what is missing.",
+    "Today: what training is appropriate for my current recovery, and what should I avoid?",
+    "Sleep: compare last night with my recent pattern. Cite duration, rest and stages when available.",
+    "Sleep: name the one change most likely to improve my next night, without making a medical claim.",
 )
 
 @Composable
 private fun SuggestedPrompts(onPick: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Overline("Try asking")
+        Overline("Ask about Today or Sleep")
         // Simple wrapped column of chips (one per row keeps long prompts readable).
         SUGGESTED_PROMPTS.forEach { prompt ->
             val shape = RoundedCornerShape(50)
