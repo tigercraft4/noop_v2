@@ -102,6 +102,7 @@ fun AutomationsScreen(viewModel: AppViewModel) {
     // The engine also requires the global notification master (default OFF); surface that dependency so
     // enabling the reminder while master is off isn't silently inert.
     val notifMasterOn = NotifPrefs.getBool(ctx, NotifPrefs.MASTER, false)
+    var dailyCoachEnabled by remember { mutableStateOf(NoopPrefs.morningReportEnabled(ctx)) }
 
     // PERF (#707): lazy scaffold — each settings section is an unconditional top-level child, so each
     // becomes one `item { }` in the same order. No standalone Spacers (the eager `spacedBy(20.dp)` is
@@ -111,6 +112,24 @@ fun AutomationsScreen(viewModel: AppViewModel) {
         title = uiString(R.string.l10n_automations_screen_automations_82542d6d),
         subtitle = "Make the strap do things: tap to act, walk away to lock, train by feel.",
     ) {
+        item {
+        SettingsSection(
+            icon = Icons.Filled.Bedtime,
+            title = "Daily Coach",
+            blurb = "A once-daily, on-device briefing after your overnight sync. It uses only the metrics NOOP has already scored.",
+            active = dailyCoachEnabled,
+        ) {
+            ToggleRow(
+                label = "Morning training briefing",
+                help = "Includes Recovery, HRV, resting heart rate and sleep when available, plus a conservative training suggestion. Nothing is sent to an AI provider.",
+                checked = dailyCoachEnabled,
+                onChange = {
+                    dailyCoachEnabled = it
+                    NoopPrefs.setMorningReportEnabled(ctx, it)
+                },
+            )
+        }
+        }
         // Double-tap (parity since 4.2.8): a real, persisted action picker bound to the ViewModel, with a
         // Test action button. Mirrors AutomationsView.swift's Picker (Apple-applicable subset only; no
         // lockScreen / runShortcut on Android).

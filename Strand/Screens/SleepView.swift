@@ -31,6 +31,8 @@ struct SleepView: View {
     // "Syncing strap history…" note — each own their OWN `@EnvironmentObject var live` in a small
     // leaf below (mirrors the Today leaf-scoping pattern), so a tick refreshes only that leaf.
     @EnvironmentObject var intelligence: IntelligenceEngine
+    @EnvironmentObject var app: AppModel
+    @EnvironmentObject var router: NavRouter
 
     // The standard tile grid: ONE adaptive column set, used for every tile group.
     private let tileColumns = [GridItem(.adaptive(minimum: 168), spacing: NoopMetrics.gap)]
@@ -129,7 +131,18 @@ struct SleepView: View {
                        // re-evaluates this heavy body.
                        onRefresh: { await repo.refresh() },
                        lazy: true,
-                       topBackground: liquidScaffoldSky()) {
+                       topBackground: liquidScaffoldSky(),
+                       trailing: {
+                           Button {
+                               app.coach.pendingPrompt = "Sleep: compare last night with my recent pattern. Cite duration, rest and stages when available."
+                               router.openCoach()
+                           } label: {
+                               Label("Ask Coach", systemImage: "sparkles")
+                           }
+                           .buttonStyle(.bordered)
+                           .tint(StrandPalette.accent)
+                           .accessibilityHint("Prepares a question; it is not sent automatically")
+                       }) {
             Group {
                 if let resolved {
                     // Each top-level section fades + rises in sequence on first appear (Reduce-Motion safe).

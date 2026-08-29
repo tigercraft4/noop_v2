@@ -169,6 +169,7 @@ struct ActiveWorkoutIndicatorSection: View {
 }
 
 struct TodayView: View {
+    @EnvironmentObject var app: AppModel
     @EnvironmentObject var repo: Repository
     // PERF (scroll stutter): TodayView deliberately does NOT observe `LiveState` directly. A connected
     // strap publishes `LiveState` ~1 Hz (heart rate + each R-R packet), and an `@EnvironmentObject live`
@@ -1269,7 +1270,18 @@ struct TodayView: View {
                        // body re-eval (the masked image is itself one offscreen pass). That was a v7.0.2
                        // lag regression; removing the flatten restores native layer caching.
                        topBackground: showDayCycleBackground
-                           ? AnyView(SceneScreenBackground(hour: demoSceneHour)) : nil) {
+                           ? AnyView(SceneScreenBackground(hour: demoSceneHour)) : nil,
+                       trailing: {
+                           Button {
+                               app.coach.pendingPrompt = "Today: explain my readiness from charge, HRV and rest. Cite the numbers you used and what is missing."
+                               router.openCoach()
+                           } label: {
+                               Label("Ask Coach", systemImage: "sparkles")
+                           }
+                           .buttonStyle(.bordered)
+                           .tint(StrandPalette.accent)
+                           .accessibilityHint("Prepares a question; it is not sent automatically")
+                       }) {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
                 #if os(iOS)
                 // Compact top bar: profile/settings (left) · ‹ Today › day-nav (centre, bold) · strap

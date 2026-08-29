@@ -272,6 +272,9 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val updateStore = remember { UpdateStore.from(context) }
     var showUpdatesInbox by remember { mutableStateOf(false) }
+    // One-shot contextual prompt from Today/Sleep. CoachScreen turns this into an editable draft;
+    // navigation never sends a request.
+    var pendingCoachPrompt by remember { mutableStateOf<String?>(null) }
 
     run {
         Scaffold(
@@ -343,6 +346,10 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                         // #627: the journal-reminder card opens the journal (hosted in Insights), same
                         // destination the Sleep screen's morning sheet uses.
                         onOpenJournal = { nav.navigateTopLevel(Destination.Insights.route) },
+                        onOpenCoach = { prompt ->
+                            pendingCoachPrompt = prompt
+                            nav.navigateTopLevel(Destination.Coach.route)
+                        },
                     )
                 }
                 composable(Destination.Live.route) {
@@ -355,6 +362,10 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                     SleepScreen(
                         vm = viewModel,
                         onOpenJournal = { nav.navigateTopLevel(Destination.Insights.route) },
+                        onOpenCoach = { prompt ->
+                            pendingCoachPrompt = prompt
+                            nav.navigateTopLevel(Destination.Coach.route)
+                        },
                     )
                 }
                 composable(Destination.CoupledView.route) {
@@ -366,7 +377,12 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                 }
                 composable(Destination.Intervals.route) { IntervalsScreen(viewModel) }
                 composable(Destination.Breathe.route) { BreatheScreen(viewModel) }
-                composable(Destination.Coach.route) { CoachScreen() }
+                composable(Destination.Coach.route) {
+                    CoachScreen(
+                        initialPrompt = pendingCoachPrompt,
+                        onInitialPromptConsumed = { pendingCoachPrompt = null },
+                    )
+                }
                 composable(Destination.Explore.route) { TrendsExploreScreen(viewModel) }
                 composable(Destination.Automations.route) { AutomationsScreen(viewModel) }
                 composable(Destination.SmartAlarm.route) { SmartAlarmScreen(viewModel) }
